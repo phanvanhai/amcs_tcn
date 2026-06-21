@@ -1,0 +1,176 @@
+# trainer/trainer.py
+import os
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from tqdm import tqdm
+import numpy as np
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+import seaborn as sns
+
+
+class Trainer:
+    def __init__(self, model, train_loader, val_loader, test_loader, config):
+        self.model = model.to(config['device'])
+        self.train_loader = train_loader
+        self.val_loader = val_loader
+        self.test_loader = test_loader
+        self.config = config
+        self.device = config['device']
+
+        self.criterion = nn.CrossEntropyLoss()
+        self.optimizer = optim.Adam(model.parameters(), lr=config['lr'])
+
+        # ===================== 早停机制初始化 =====================
+        self.best_acc = 0.0
+        self.best_val_loss = float('inf')  # 记录最优验证损失
+        self.early_stop_patience = 10  # 论文标准：10轮无提升则停止
+        self.early_stop_counter = 0  # 计数
+        self.early_stop = False  # 早停触发标志
+        # ==========================================================
+
+        # 记录曲线
+        self.train_losses = []
+        self.val_losses = []
+        self.train_accs = []
+        self.val_accs = []
+
+        # 自动创建文件夹
+        os.makedirs(config['save_dir'], exist_ok=True)
+        os.makedirs(config['log_dir'], exist_ok=True)
+
+    def train_epoch(self):
+        self.model.train()
+        total_loss = 0.0
+        preds_all, labels_all = [], []
+
+        for x, y in tqdm(self.train_loader):
+            x, y = x.to(self.device), y.to(self.device)
+            self.optimizer.zero_grad()
+            out = self.model(x)
+            loss = self.criterion(out, y)
+            loss.backward()
+            self.optimizer.step()
+
+            total_loss += loss.item()
+            pred = torch.argmax(out, dim=1)
+            preds_all.extend(pred.cpu().numpy())
+            labels_all.extend(y.cpu().numpy())
+
+        acc = accuracy_score(labels_all, preds_all)
+        return total_loss / len(self.train_loader), acc
+
+    def val_epoch(self):
+        self.model.eval()
+        total_loss = 0.0
+        preds_all, labels_all = [], []
+
+        with torch.no_grad():
+            for x, y in self.val_loader:
+                x, y = x.to(self.device), y.to(self.device)
+                out = self.model(x)
+                loss = self.criterion(out, y)
+                total_loss += loss.item()
+                pred = torch.argmax(out, dim=1)
+                preds_all.extend(pred.cpu().numpy())
+                labels_all.extend(y.cpu().numpy())
+
+        acc = accuracy_score(labels_all, preds_all)
+        return total_loss / len(self.val_loader), acc
+
+    def run(self):
+        print("\n🚀 Start Training (With Early Stopping)...\n")
+        for epoch in range(self.config['epochs']):
+            if self.early_stop:
+                print("\n🛑 Early Stopping! 验证集 10 轮无提升，训练提前结束！")
+                break
+
+            train_loss, train_acc = self.train_epoch()
+            val_loss, val_acc = self.val_epoch()
+
+            # 保存历史
+            self.train_losses.append(train_loss)
+            self.val_losses.append(val_loss)
+            self.train_accs.append(train_acc)
+            self.val_accs.append(val_acc)
+
+            # 打印日志
+            print(f"[Epoch {epoch + 1:2d}] "
+                  f"Train loss: {train_loss:.4f} acc: {train_acc:.4f} | "
+                  f"Val loss: {val_loss:.4f} acc: {val_acc:.4f}")
+
+            # ===================== 早停核心逻辑 =====================
+            # 保存最优模型
+            if val_acc > self.best_acc:
+                self.best_acc = val_acc
+                torch.save(self.model.state_dict(), f"{self.config['save_dir']}/best.pth")
+
+
+            # 判断是否需要早停
+            if val_loss < self.best_val_loss:
+                self.best_val_loss = val_loss
+                self.early_stop_counter = 0
+            else:
+                self.early_stop_counter += 1
+                print(f"⚠️ 早停计数：{self.early_stop_counter}/{self.early_stop_patience}")
+
+                if self.early_stop_counter >= self.early_stop_patience:
+                    self.early_stop = True
+            # ==========================================================
+
+        self.plot_curve()
+
+    def test(self, class_names):
+        # 加载最优模型
+        self.model.load_state_dict(torch.load(f"{self.config['save_dir']}/best.pth"))
+        self.model.eval()
+        preds_all, labels_all = [], []
+
+        with torch.no_grad():
+            for x, y in self.test_loader:
+                x = x.to(self.device)
+                out = self.model(x)
+                pred = torch.argmax(out, dim=1)
+                preds_all.extend(pred.cpu().numpy())
+                labels_all.extend(y.numpy())
+
+        # 计算指标
+        acc = accuracy_score(labels_all, preds_all)
+        report = classification_report(labels_all, preds_all, target_names=class_names, digits=4)
+
+        # 保存结果
+        with open(os.path.join(self.config['log_dir'], "test_accuracy.txt"), "w", encoding="utf-8") as f:
+            f.write(f"Test Accuracy: {acc:.4f} ({acc * 100:.2f}%)\n")
+
+        with open(os.path.join(self.config['log_dir'], "classification_report.txt"), "w", encoding="utf-8") as f:
+            f.write(report)
+
+        print(f"\n🎯 Test Accuracy: {acc:.4f} ({acc * 100:.2f}%)\n")
+        print(report)
+        self.plot_cm(labels_all, preds_all, class_names)
+        return acc
+
+    def plot_curve(self):
+        plt.figure(figsize=(12, 4))
+        plt.subplot(1, 2, 1)
+        plt.plot(self.train_losses, label='train loss')
+        plt.plot(self.val_losses, label='val loss')
+        plt.legend()
+
+        plt.subplot(1, 2, 2)
+        plt.plot(self.train_accs, label='train acc')
+        plt.plot(self.val_accs, label='val acc')
+        plt.legend()
+        plt.savefig(f"{self.config['log_dir']}/curve.png")
+        plt.close()
+
+    def plot_cm(self, y_true, y_pred, class_names):
+        cm = confusion_matrix(y_true, y_pred)
+        plt.figure(figsize=(10, 8))
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=class_names, yticklabels=class_names)
+        plt.title("Confusion Matrix")
+        plt.savefig(f"{self.config['log_dir']}/cm.png")
+        plt.close()
