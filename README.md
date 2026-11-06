@@ -1,0 +1,62 @@
+# AMCS-TCN (FC head) on UT-HAR
+
+Fork of [AMCS-TCN-by-BoYuan](https://github.com/boyuanzhang759-rgb/AMCS-TCN-by-BoYuan)
+(Zhang et al., *Complex & Intelligent Systems* 12:146, 2026), set up to train only `AMCS_TCN_FC` on UT-HAR.
+
+Changes vs. upstream:
+- Added `datasets/csi_dataset.py` (UT-HAR loader, missing upstream) and `requirements.txt`.
+- All dataset / training settings live in `config.py` (class names, number of classes, antennas,
+  subcarriers, time steps, class weights, LR schedule, early stopping, noise).
+- `AMCS_TCN` / `AMCS_TCN_FC` accept any number of antennas, subcarriers and time steps;
+  the FC input size is computed from `time_steps`. Old checkpoints still load.
+- Other models (GAP head, baselines) are commented out in `main.py` / `run_all.py`.
+
+## Data
+
+UT-HAR in SenseFi format (the `.csv` files are NumPy binaries):
+
+```
+UT_HAR/
+  data/X_train.csv  X_val.csv  X_test.csv   # (N, 250, 90)
+  label/y_train.csv y_val.csv  y_test.csv   # (N,) labels 0..6
+```
+
+The data is not in this repo. Locally the default path is set in `config.py`; on Kaggle the
+loader searches `/kaggle/input` automatically. Use `--data_path` to point anywhere else.
+
+## Run on Kaggle
+
+1. Upload the `UT_HAR` folder as a Kaggle Dataset (or use an existing public one) and add it to the notebook.
+2. Notebook settings: **Accelerator = GPU T4**, **Internet = On**.
+3. Cells:
+
+```python
+!git clone https://github.com/<user>/<repo>.git
+%cd <repo>
+!pip install -q -r requirements.txt
+```
+
+```python
+!python main.py                 # single run, seed 3407, 150 epochs
+# !python run_all.py            # 5 seeds, 100 epochs, mean ± std
+# !python main.py --data_path /kaggle/input/<dataset>/UT_HAR --batch_size 32
+```
+
+Outputs: `model/AMCS_TCN_FC/best.pth`, `logs/AMCS_TCN_FC/` (curves, confusion matrix, metrics).
+Copy them to `/kaggle/working` if the repo was cloned elsewhere, so they are kept after the session.
+
+For a private repo, store a GitHub token in Kaggle *Add-ons → Secrets* (e.g. `GITHUB_TOKEN`) and clone with:
+
+```python
+from kaggle_secrets import UserSecretsClient
+token = UserSecretsClient().get_secret("GITHUB_TOKEN")
+!git clone https://{token}@github.com/<user>/<repo>.git
+```
+
+## Run locally
+
+```
+pip install -r requirements.txt
+python main.py
+python run_all.py --seeds 42 3407
+```

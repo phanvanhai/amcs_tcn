@@ -95,10 +95,10 @@ class FCA_Block(nn.Module):
         weights_tensor = torch.cat(weights, dim=1)
         weights_norm = weights_tensor / (torch.sum(weights_tensor, dim=1, keepdim=True) + 1e-8)
 
-        # 论文公式(2): 天线特征逐元素连乘 (Product) 过滤受损物理链路
-        f2 = (f1_list[0] * weights_norm[:, 0:1, None, None]) * \
-             (f1_list[1] * weights_norm[:, 1:2, None, None]) * \
-             (f1_list[2] * weights_norm[:, 2:3, None, None])
+        # 论文公式(2): 天线特征逐元素连乘 (Product) 过滤受损物理链路 (支持任意天线数)
+        f2 = f1_list[0] * weights_norm[:, 0:1, None, None]
+        for i in range(1, len(f1_list)):
+            f2 = f2 * (f1_list[i] * weights_norm[:, i:i + 1, None, None])
 
         # 【拯救梯度】：再次拉回分布，确保 TCN 能够接收到充沛的信号
         f2 = self.fusion_bn(f2)
@@ -185,48 +185,59 @@ class TCN_Backbone(nn.Module):
 # ==========================================
 # 4. AMCS-TCN 主模型入口
 # ==========================================
-class AMCS_TCN(nn.Module):
-    def __init__(self, num_classes=10, cnn_channels=32, subcarriers=30):
+class AMCS_TCN_Base(nn.Module):
+    """共享主干: 多天线 MCS+FMFA -> FCA -> TCN。子类只需定义分类头 (GAP 或 FC)。
+
+    参数与 baselines 保持一致: num_classes, subcarriers, antennas, time_steps。
+    输入: (Batch, antennas, time_steps, subcarriers)
+    """
+
+    def __init__(self, num_classes=7, subcarriers=30, antennas=3, time_steps=250,
+                 cnn_channels=32, tcn_channels=64, dilations=(1, 2, 4, 8)):
         super().__init__()
-        # 3 个独立的天线特征流
-        self.antenna_streams = nn.ModuleList([MCS_FMFA_Block(1, cnn_channels) for _ in range(3)])
+        self.antennas = antennas
+        self.subcarriers = subcarriers
+        self.time_steps = time_steps
+        self.tcn_channels = tcn_channels
+        self.dilations = list(dilations)
+
+        # 每根天线一个独立的特征流
+        self.antenna_streams = nn.ModuleList([MCS_FMFA_Block(1, cnn_channels) for _ in range(antennas)])
 
         # 跨天线特征融合
         self.fca_fusion = FCA_Block(cnn_channels, reduction_ratio=16)
 
         # TCN 时序建模
         tcn_in_channels = cnn_channels * subcarriers
-        self.tcn = TCN_Backbone(in_channels=tcn_in_channels, tcn_channels=64, dilations=[1, 2, 4, 8])
+        self.tcn = TCN_Backbone(in_channels=tcn_in_channels, tcn_channels=tcn_channels, dilations=self.dilations)
 
-        # 全局平均池化 (GAP) 与最终分类器
-        self.gap = nn.AdaptiveAvgPool1d(1)
-        self.classifier = nn.Linear(64, num_classes)
+    def extract(self, x):
+        if x.shape[1] != self.antennas or x.shape[3] != self.subcarriers:
+            raise ValueError(f"Expected input (B, {self.antennas}, T, {self.subcarriers}), got {tuple(x.shape)}")
 
-    def forward(self, x):
-        """
-        输入要求: (Batch_Size, 3根天线, Time_Steps, 30个子载波)
-        """
-        # 1. 拆分3根天线并拓展维度适配 2D 卷积: (B, T, Sub) -> (B, 1, T, Sub)
-        ant1 = x[:, 0, :, :].unsqueeze(1)
-        ant2 = x[:, 1, :, :].unsqueeze(1)
-        ant3 = x[:, 2, :, :].unsqueeze(1)
-
-        # 2. 独立多尺度特征提取与 FMFA 连乘融合
-        f1_1 = self.antenna_streams[0](ant1)
-        f1_2 = self.antenna_streams[1](ant2)
-        f1_3 = self.antenna_streams[2](ant3)
+        # 1+2. 每根天线 (B, T, Sub) -> (B, 1, T, Sub)，独立多尺度特征提取与 FMFA 连乘融合
+        f1_list = [stream(x[:, i].unsqueeze(1)) for i, stream in enumerate(self.antenna_streams)]
 
         # 3. 跨天线 FCA 评估与连乘过滤 -> 输出: (B, C, T, Sub)
-        f2 = self.fca_fusion([f1_1, f1_2, f1_3])
+        f2 = self.fca_fusion(f1_list)
 
         # 4. 展平空间维度，准备一维 TCN 输入
         B, C, T, Sub = f2.shape
         tcn_in = f2.permute(0, 1, 3, 2).reshape(B, C * Sub, T)
 
-        # 5. TCN 时序特征提取与全局特征压缩
-        tcn_out = self.tcn(tcn_in)
-        pooled = self.gap(tcn_out).squeeze(-1)
+        # 5. TCN 时序特征提取 -> (B, tcn_channels, T // 2^len(dilations))
+        return self.tcn(tcn_in)
 
+
+class AMCS_TCN(AMCS_TCN_Base):
+    def __init__(self, num_classes=7, subcarriers=30, antennas=3, time_steps=250, **kwargs):
+        super().__init__(num_classes, subcarriers, antennas, time_steps, **kwargs)
+        # 全局平均池化 (GAP) 与最终分类器
+        self.gap = nn.AdaptiveAvgPool1d(1)
+        self.classifier = nn.Linear(self.tcn_channels, num_classes)
+
+    def forward(self, x):
+        tcn_out = self.extract(x)
+        pooled = self.gap(tcn_out).squeeze(-1)
         # 6. 分类输出 (Trainer模块中的 CrossEntropyLoss 已包含 Softmax)
-        logits = self.classifier(pooled)
-        return logits
+        return self.classifier(pooled)

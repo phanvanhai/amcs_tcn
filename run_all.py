@@ -9,16 +9,22 @@ from torch.utils.data import DataLoader
 # 把项目根目录加入Python路径，解决模块找不到问题
 sys.path.append(str(Path(__file__).parent))
 
+# Windows (cp1252) console/redirect cannot print emoji/Chinese in the logs -> force UTF-8
+for _s in (sys.stdout, sys.stderr):
+    if hasattr(_s, 'reconfigure'):  # không có khi chạy bằng %run trong Jupyter/Kaggle notebook
+        _s.reconfigure(encoding='utf-8')
+
 # 导入数据集和训练器
 from datasets.csi_dataset import CSIDataset
 from trainer import Trainer
 
-# 导入所有需要对比的模型
-from models.amcs_tcn import AMCS_TCN
+# 仅使用 AMCS_TCN_FC。如需对比其他模型，取消下方 import 的注释并在 model_classes 中启用
 from models.amcs_tcn_fc import AMCS_TCN_FC
-from models.baselines.a_blstm import A_BLSTM
-from models.baselines.lstm_cnn import LSTM_CNN
-from models.baselines.cnn_gru_cnn import CNN_GRU_CNN
+# from models.amcs_tcn import AMCS_TCN
+# from models.baselines.a_blstm import A_BLSTM
+# from models.baselines.lstm_cnn import LSTM_CNN
+# from models.baselines.cnn_gru_cnn import CNN_GRU_CNN
+from config import build_config, model_kwargs, dataset_kwargs, add_common_args
 
 
 def set_seed(seed=3407):
@@ -32,30 +38,27 @@ def set_seed(seed=3407):
 
 
 def main():
-    config = {
-        'data_path': 'C:/AMCS-TCN/data/processed_csi',
-        'batch_size': 64,
-        'lr': 1e-3,
-        'epochs': 100,  # 严格对齐论文，训练 100 个 Epoch
-        'device': 'cuda' if torch.cuda.is_available() else 'cpu',
-        'save_dir': 'model',
-        'log_dir': 'logs',
-        'num_classes': 7
-    }
+    import argparse
+    parser = add_common_args(argparse.ArgumentParser())
+    parser.add_argument('--seeds', type=int, nargs='+', default=[42, 3407, 1024, 2024, 0])
+    args = parser.parse_args()
 
-    class_names = ['bed', 'fall', 'pickup', 'run', 'sitdown', 'standup', 'walk']
+    # 配置见 config.py (默认 100 轮，严格对齐论文)
+    config = build_config(args.dataset, data_path=args.data_path, epochs=args.epochs,
+                          batch_size=args.batch_size, lr=args.lr, device=args.device)
+    class_names = config['class_names']
 
-    # 定义要求的 5 个不同随机种子
-    seed_list = [42, 3407, 1024, 2024, 0]
+    # 定义要求的不同随机种子 (默认 5 个)
+    seed_list = args.seeds
 
     print(f"🖥️ 当前使用的计算设备: {config['device'].upper()}")
 
     # 定义要训练的模型类列表 (只存入类名，不提前实例化！)
     model_classes = [
-        ("A_BLSTM", A_BLSTM),
-        ("LSTM_CNN", LSTM_CNN),
-        ("CNN_GRU_CNN", CNN_GRU_CNN),
-        ("AMCS_TCN", AMCS_TCN),
+        # ("A_BLSTM", A_BLSTM),
+        # ("LSTM_CNN", LSTM_CNN),
+        # ("CNN_GRU_CNN", CNN_GRU_CNN),
+        # ("AMCS_TCN", AMCS_TCN),
         ("AMCS_TCN_FC", AMCS_TCN_FC)
     ]
 
@@ -76,22 +79,22 @@ def main():
 
         # 内层循环：5 个不同的随机种子
         for i, current_seed in enumerate(seed_list):
-            print(f"\n---> 正在进行第 {i + 1}/5 次实验 (Seed: {current_seed})")
+            print(f"\n---> 正在进行第 {i + 1}/{len(seed_list)} 次实验 (Seed: {current_seed})")
 
             # 在每一次实验前，严格重置全局随机状态
             set_seed(current_seed)
 
             # 将 DataLoader 的实例化移入循环，确保每次实验的数据划分和打乱绝对独立且受当前种子控制
-            train_set = CSIDataset(config['data_path'], 'train')
-            val_set = CSIDataset(config['data_path'], 'val')
-            test_set = CSIDataset(config['data_path'], 'test')
+            train_set = CSIDataset(config['data_path'], 'train', **dataset_kwargs(config))
+            val_set = CSIDataset(config['data_path'], 'val', **dataset_kwargs(config))
+            test_set = CSIDataset(config['data_path'], 'test', **dataset_kwargs(config))
 
             train_loader = DataLoader(train_set, config['batch_size'], shuffle=True)
             val_loader = DataLoader(val_set, config['batch_size'], shuffle=False)
             test_loader = DataLoader(test_set, config['batch_size'], shuffle=False)
 
             # 动态实例化模型与 Trainer
-            model = ModelClass(num_classes=config['num_classes'])
+            model = ModelClass(**model_kwargs(config))
             trainer = Trainer(model, train_loader, val_loader, test_loader, config)
 
             # 执行训练
@@ -141,12 +144,12 @@ def main():
             results_summary[model_name]['rrmse_mean'] = np.mean(metrics_history['rrmse'])
 
         print(
-            f"\n🎉 {model_name} 5次完整评估结束！平均 Accuracy: {results_summary[model_name]['acc_mean']:.2f} ± {results_summary[model_name]['acc_std']:.2f}%\n")
+            f"\n🎉 {model_name} {len(seed_list)}次完整评估结束！平均 Accuracy: {results_summary[model_name]['acc_mean']:.2f} ± {results_summary[model_name]['acc_std']:.2f}%\n")
 
     # 打印最终性能排行榜
     print("\n" + "🏆" * 40)
     print(
-        "                              最终模型性能对比排行榜 (5次独立实验均值 ± 标准差)                              ")
+        f"                              最终模型性能对比排行榜 ({len(seed_list)}次独立实验均值 ± 标准差)                              ")
     print("🏆" * 40)
 
     # 按准确率均值从高到低排序
@@ -165,7 +168,7 @@ def main():
     # 将汇总结果写入总日志文件
     summary_path = os.path.join(config['log_dir'], "experiment_summary.txt")
     with open(summary_path, "w", encoding="utf-8") as f:
-        f.write("模型对比实验最终结果 (5次独立实验)\n")
+        f.write(f"模型对比实验最终结果 ({len(seed_list)}次独立实验)\n")
         f.write("=" * 110 + "\n")
         f.write(
             f"{'Rank':<4} | {'Model Name':<15} | {'Accuracy (%)':<15} | {'Precision (%)':<15} | {'Recall (%)':<15} | {'F1-Score (%)':<15} | {'Parameters':<10}\n")

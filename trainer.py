@@ -29,21 +29,23 @@ class Trainer:
         self.config = config
         self.device = config['device']
 
-        # 【恢复】：数据分类权重调整，解决类别不平衡问题
-        # 顺序对应：['bed','fall','pickup','run','sitdown','standup','walk']
-        # 适当降低易识别/样本多的权重，提高困难/样本少的权重
-        weights = torch.tensor([1.0, 1.0, 0.8, 1.0, 0.8, 1.5, 2.0], dtype=torch.float32).to(self.device)
+        # 数据分类权重调整，解决类别不平衡问题 (config['class_weights']: list / 'auto' / None)
+        weights = self._build_class_weights(config.get('class_weights'), config['num_classes'])
         self.criterion = nn.CrossEntropyLoss(weight=weights)
 
         # 仅使用 Adam 优化器，移除多余的 L2 正则化
         self.optimizer = optim.Adam(model.parameters(), lr=config['lr'])
 
-        # 恢复平缓的学习率衰减！每 20 轮衰减一半，兼顾轻量模型和巨型模型
-        self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=20, gamma=0.5)
+        # 平缓的学习率衰减 (默认每 20 轮衰减一半)
+        self.lr_step = config.get('lr_step', 20)
+        self.lr_gamma = config.get('lr_gamma', 0.5)
+        self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=self.lr_step, gamma=self.lr_gamma)
+
+        self.noise_std = config.get('noise_std', 0.02)
 
         self.best_acc = 0.0
         self.best_val_loss = float('inf')
-        self.early_stop_patience = 10
+        self.early_stop_patience = config.get('early_stop_patience', 10)
         self.early_stop_counter = 0
         self.early_stop = False
 
@@ -58,6 +60,20 @@ class Trainer:
         self.log_dir = os.path.join(config['log_dir'], self.model_name)
         os.makedirs(self.save_dir, exist_ok=True)
         os.makedirs(self.log_dir, exist_ok=True)
+
+    def _build_class_weights(self, spec, num_classes):
+        if spec is None:
+            return None
+        if spec == 'auto':
+            # 逆频率权重，按类别数归一化使均值为 1
+            labels = torch.as_tensor(self.train_loader.dataset.y)
+            counts = torch.bincount(labels, minlength=num_classes).float().clamp(min=1)
+            w = counts.sum() / (num_classes * counts)
+        else:
+            w = torch.tensor(spec, dtype=torch.float32)
+            if len(w) != num_classes:
+                raise ValueError(f"class_weights has {len(w)} entries, expected {num_classes}")
+        return w.to(self.device)
 
     def calculate_model_size(self):
         """计算模型的参数量和体积（MB）"""
@@ -74,8 +90,8 @@ class Trainer:
             x, y = x.to(self.device), y.to(self.device)
 
             # 数据增强 (Jittering)。给 CSI 信号加入微小的动态高斯噪声
-            noise = torch.randn_like(x) * 0.02
-            x = x + noise
+            if self.noise_std > 0:
+                x = x + torch.randn_like(x) * self.noise_std
 
             self.optimizer.zero_grad()
             out = self.model(x)
@@ -111,7 +127,8 @@ class Trainer:
 
     def run(self):
         total_params, size_mb = self.calculate_model_size()
-        print(f"\n🚀 Start Training {self.model_name} (LR Scheduler: StepLR(30, 0.5), Class Weights: On)...")
+        print(f"\n🚀 Start Training {self.model_name} (LR Scheduler: StepLR({self.lr_step}, {self.lr_gamma}), "
+              f"Class Weights: {'On' if self.criterion.weight is not None else 'Off'})...")
         print(f"📦 Model Parameters: {total_params:,} | Size: {size_mb:.4f} MB\n")
 
         for epoch in range(self.config['epochs']):
