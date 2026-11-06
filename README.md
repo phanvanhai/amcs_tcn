@@ -42,8 +42,23 @@ loader searches `/kaggle/input` automatically. Use `--data_path` to point anywhe
 # !python main.py --data_path /kaggle/input/<dataset>/UT_HAR --batch_size 32
 ```
 
-Outputs: `model/AMCS_TCN_FC/best.pth`, `logs/AMCS_TCN_FC/` (curves, confusion matrix, metrics).
-Copy them to `/kaggle/working` if the repo was cloned elsewhere, so they are kept after the session.
+Outputs of `main.py`: `model/AMCS_TCN_FC/best.pth`, `logs/AMCS_TCN_FC/`.
+
+Outputs of `run_all.py` (one folder per run, summary rewritten after every seed):
+
+```
+results/<YYYYmmdd-HHMMSS>_UT_HAR/
+  config.json, environment.json
+  summary.txt          # mean ± std + comparison with the paper's numbers
+  summary.csv
+  AMCS_TCN_FC/
+    per_seed.csv, per_class_mean_std.csv, summary.json
+    seed_<s>/  best.pth, history.csv, curve.png, metrics.json, test_metrics_and_size.txt,
+               classification_report.txt, per_class_metrics.csv, confusion_matrix.csv,
+               cm.png, cm_normalized.png, predictions.csv
+```
+
+Clone into `/kaggle/working` so outputs are kept after the session.
 
 For a private repo, store a GitHub token in Kaggle *Add-ons → Secrets* (e.g. `GITHUB_TOKEN`) and clone with:
 

@@ -1,7 +1,28 @@
-import sys
+"""Chạy mô hình với nhiều seed, lưu chi tiết từng seed và bảng tổng hợp mean ± std.
+
+Cấu trúc thư mục kết quả:
+results/<YYYYmmdd-HHMMSS>_<dataset>/
+    config.json, environment.json
+    <Model>/
+        seed_<s>/   best.pth, history.csv, curve.png, metrics.json, test_metrics_and_size.txt,
+                    classification_report.txt, per_class_metrics.csv, confusion_matrix.csv,
+                    cm.png, cm_normalized.png, predictions.csv
+        per_seed.csv          # mỗi seed một dòng (ghi lại sau mỗi seed)
+        per_class_mean_std.csv
+        summary.json
+    summary.csv               # mean ± std mỗi model
+    summary.txt               # bảng tổng hợp + so sánh với số liệu bài báo
+"""
+import csv
+import json
 import os
-from pathlib import Path
+import platform
 import random
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
@@ -26,6 +47,19 @@ from models.amcs_tcn_fc import AMCS_TCN_FC
 # from models.baselines.cnn_gru_cnn import CNN_GRU_CNN
 from config import build_config, model_kwargs, dataset_kwargs, add_common_args
 
+# Số liệu bài báo (Zhang et al. 2026) trên dataset 10 lớp của họ, dùng để tham chiếu.
+# Table 3 (AMCS-TCN, 5 seed, mean ± std, %), Table 2 (AMCS+FC, 1 lần), Table 5 (RRMSE, Brier).
+PAPER_REFERENCE = {
+    'AMCS-TCN (GAP), Table 3': {'accuracy': (98.85, 0.12), 'precision': (98.78, 0.15),
+                                'recall': (98.66, 0.18), 'f1': (98.68, 0.14)},
+    'AMCS+FC, Table 2': {'accuracy': (98.72, None), 'precision': (98.76, None),
+                         'recall': (98.69, None), 'f1': (98.76, None)},
+    'AMCS-TCN, Table 5': {'rrmse': (0.3950, None), 'brier_score': (0.0156, None)},
+}
+
+PCT_METRICS = ['accuracy', 'precision', 'recall', 'f1']
+RAW_METRICS = ['brier_score', 'rrmse', 'latency_ms', 'best_epoch', 'epochs_trained', 'train_time_s']
+
 
 def set_seed(seed=3407):
     """固定所有随机种子，确保每次独立实验的绝对公平与可复现性"""
@@ -37,10 +71,112 @@ def set_seed(seed=3407):
     torch.backends.cudnn.benchmark = False
 
 
+def write_csv(path, header, rows):
+    with open(path, 'w', newline='', encoding='utf-8') as f:
+        w = csv.writer(f)
+        w.writerow(header)
+        w.writerows(rows)
+
+
+def environment_info():
+    info = {'python': sys.version.split()[0], 'platform': platform.platform(), 'torch': torch.__version__,
+            'cuda_available': torch.cuda.is_available()}
+    if torch.cuda.is_available():
+        info['gpu'] = torch.cuda.get_device_name(0)
+        info['cuda'] = torch.version.cuda
+    return info
+
+
+def mean_std(values):
+    # np.std 默认 ddof=0 (与原代码一致)
+    return float(np.mean(values)), float(np.std(values))
+
+
+def summarize_model(model_dir, model_name, per_seed, class_names):
+    """写 per_seed.csv / per_class_mean_std.csv / summary.json，返回汇总字典。"""
+    seeds = [r['seed'] for r in per_seed]
+    keys = PCT_METRICS + RAW_METRICS
+    write_csv(os.path.join(model_dir, 'per_seed.csv'), ['seed'] + keys + ['params', 'size_mb'],
+              [[r['seed']] + [r[k] for k in keys] + [r['params'], r['size_mb']] for r in per_seed])
+
+    summary = {'model': model_name, 'seeds': seeds, 'n_runs': len(per_seed),
+               'params': per_seed[-1]['params'], 'size_mb': per_seed[-1]['size_mb']}
+    for k in PCT_METRICS:
+        summary[k + '_mean'], summary[k + '_std'] = (v * 100 for v in mean_std([r[k] for r in per_seed]))
+    for k in RAW_METRICS:
+        summary[k + '_mean'], summary[k + '_std'] = mean_std([r[k] for r in per_seed])
+
+    # 每个类别的 precision / recall / f1 在各 seed 间的 mean ± std
+    per_class = {}
+    for r in per_seed:
+        with open(os.path.join(model_dir, f"seed_{r['seed']}", 'per_class_metrics.csv'), encoding='utf-8') as f:
+            for row in csv.DictReader(f):
+                d = per_class.setdefault(int(row['class_id']), {'precision': [], 'recall': [], 'f1': []})
+                for k in d:
+                    d[k].append(float(row[k]))
+    rows = []
+    for cid in sorted(per_class):
+        row = [cid, class_names[cid]]
+        for k in ('precision', 'recall', 'f1'):
+            m, s = mean_std(per_class[cid][k])
+            row += [round(m * 100, 2), round(s * 100, 2)]
+        rows.append(row)
+    write_csv(os.path.join(model_dir, 'per_class_mean_std.csv'),
+              ['class_id', 'class_name', 'precision_mean', 'precision_std', 'recall_mean', 'recall_std',
+               'f1_mean', 'f1_std'], rows)
+
+    with open(os.path.join(model_dir, 'summary.json'), 'w', encoding='utf-8') as f:
+        json.dump({'summary': summary, 'per_seed': per_seed}, f, indent=2)
+    return summary
+
+
+def write_run_summary(run_dir, summaries, config):
+    write_csv(os.path.join(run_dir, 'summary.csv'),
+              ['model', 'n_runs'] + [f'{k}_{s}' for k in PCT_METRICS + RAW_METRICS for s in ('mean', 'std')]
+              + ['params', 'size_mb'],
+              [[s['model'], s['n_runs']] + [round(s[f'{k}_{t}'], 4) for k in PCT_METRICS + RAW_METRICS
+                                            for t in ('mean', 'std')] + [s['params'], round(s['size_mb'], 4)]
+               for s in summaries])
+
+    lines = [f"Dataset: {config['dataset']} ({config['num_classes']} classes, {config['antennas']} antennas, "
+             f"{config['subcarriers']} subcarriers, T={config['time_steps']})",
+             f"Data path: {config['data_path']}",
+             f"Epochs: {config['epochs']} | batch: {config['batch_size']} | lr: {config['lr']} | "
+             f"StepLR({config['lr_step']}, {config['lr_gamma']}) | early stop: {config['early_stop_patience']}",
+             '', '=== Kết quả (mean ± std qua các seed, std với ddof=0) ===']
+    for s in summaries:
+        lines.append(f"\n{s['model']}  (seeds: {s['seeds']})")
+        for k in PCT_METRICS:
+            lines.append(f"  {k:<10}: {s[k + '_mean']:6.2f} ± {s[k + '_std']:.2f} %")
+        lines.append(f"  {'brier':<10}: {s['brier_score_mean']:.4f} ± {s['brier_score_std']:.4f}")
+        lines.append(f"  {'rrmse':<10}: {s['rrmse_mean']:.4f} ± {s['rrmse_std']:.4f}")
+        lines.append(f"  params    : {s['params']:,} ({s['size_mb']:.3f} MB) | latency: "
+                     f"{s['latency_ms_mean']:.2f} ms | best epoch: {s['best_epoch_mean']:.1f} | "
+                     f"epochs: {s['epochs_trained_mean']:.1f} | train time: {s['train_time_s_mean']:.0f} s/seed")
+
+    lines += ['', '=== Số liệu bài báo (dataset 10 lớp riêng của tác giả, KHÔNG phải UT-HAR) ===']
+    for name, vals in PAPER_REFERENCE.items():
+        parts = [f"{k}={m}" + (f" ± {sd}" if sd is not None else '') for k, (m, sd) in vals.items()]
+        lines.append(f"  {name}: " + ', '.join(parts))
+    if summaries:
+        s = summaries[-1]
+        lines += ['', f"=== Chênh lệch {s['model']} so với bài báo (điểm %) ==="]
+        for ref in ('AMCS+FC, Table 2', 'AMCS-TCN (GAP), Table 3'):
+            diffs = [f"{k}: {s[k + '_mean'] - PAPER_REFERENCE[ref][k][0]:+.2f}" for k in PCT_METRICS]
+            lines.append(f"  vs {ref}: " + ', '.join(diffs))
+
+    text = '\n'.join(lines) + '\n'
+    with open(os.path.join(run_dir, 'summary.txt'), 'w', encoding='utf-8') as f:
+        f.write(text)
+    return text
+
+
 def main():
     import argparse
     parser = add_common_args(argparse.ArgumentParser())
     parser.add_argument('--seeds', type=int, nargs='+', default=[42, 3407, 1024, 2024, 0])
+    parser.add_argument('--results_dir', default='results', help='thư mục gốc chứa kết quả')
+    parser.add_argument('--run_name', default=None, help='tên thư mục lần chạy (mặc định: thời gian_dataset)')
     args = parser.parse_args()
 
     # 配置见 config.py (默认 100 轮，严格对齐论文)
@@ -51,7 +187,16 @@ def main():
     # 定义要求的不同随机种子 (默认 5 个)
     seed_list = args.seeds
 
+    run_name = args.run_name or f"{datetime.now():%Y%m%d-%H%M%S}_{config['dataset']}"
+    run_dir = os.path.join(args.results_dir, run_name)
+    os.makedirs(run_dir, exist_ok=True)
+    with open(os.path.join(run_dir, 'config.json'), 'w', encoding='utf-8') as f:
+        json.dump({**config, 'seeds': seed_list}, f, indent=2)
+    with open(os.path.join(run_dir, 'environment.json'), 'w', encoding='utf-8') as f:
+        json.dump(environment_info(), f, indent=2)
+
     print(f"🖥️ 当前使用的计算设备: {config['device'].upper()}")
+    print(f"📁 Results: {os.path.abspath(run_dir)}")
 
     # 定义要训练的模型类列表 (只存入类名，不提前实例化！)
     model_classes = [
@@ -62,8 +207,12 @@ def main():
         ("AMCS_TCN_FC", AMCS_TCN_FC)
     ]
 
-    # 用于保存最终的测试结果字典 (均值和标准差)
-    results_summary = {}
+    # 数据只加载一次 (数据集本身不依赖随机种子)
+    train_set = CSIDataset(config['data_path'], 'train', **dataset_kwargs(config))
+    val_set = CSIDataset(config['data_path'], 'val', **dataset_kwargs(config))
+    test_set = CSIDataset(config['data_path'], 'test', **dataset_kwargs(config))
+
+    summaries = []
 
     # 自动化串行训练与测试 (外层循环：模型)
     for model_name, ModelClass in model_classes:
@@ -71,130 +220,48 @@ def main():
         print(f"🚀 开始评估模型: {model_name} (共需执行 {len(seed_list)} 次独立实验)")
         print("=" * 70)
 
-        # 用于存储当前模型 5 次实验的各项指标
-        metrics_history = {
-            'accuracy': [], 'precision': [], 'recall': [], 'f1': [],
-            'brier_score': [], 'rrmse': []
-        }
+        model_dir = os.path.join(run_dir, model_name)
+        per_seed = []
 
-        # 内层循环：5 个不同的随机种子
+        # 内层循环：不同的随机种子
         for i, current_seed in enumerate(seed_list):
             print(f"\n---> 正在进行第 {i + 1}/{len(seed_list)} 次实验 (Seed: {current_seed})")
 
             # 在每一次实验前，严格重置全局随机状态
             set_seed(current_seed)
 
-            # 将 DataLoader 的实例化移入循环，确保每次实验的数据划分和打乱绝对独立且受当前种子控制
-            train_set = CSIDataset(config['data_path'], 'train', **dataset_kwargs(config))
-            val_set = CSIDataset(config['data_path'], 'val', **dataset_kwargs(config))
-            test_set = CSIDataset(config['data_path'], 'test', **dataset_kwargs(config))
-
+            # DataLoader 在循环内创建，打乱顺序受当前种子控制
             train_loader = DataLoader(train_set, config['batch_size'], shuffle=True)
             val_loader = DataLoader(val_set, config['batch_size'], shuffle=False)
             test_loader = DataLoader(test_set, config['batch_size'], shuffle=False)
 
-            # 动态实例化模型与 Trainer
+            # 动态实例化模型与 Trainer，每个 seed 独立输出目录
+            seed_config = {**config, 'output_dir': os.path.join(model_dir, f'seed_{current_seed}')}
             model = ModelClass(**model_kwargs(config))
-            trainer = Trainer(model, train_loader, val_loader, test_loader, config)
+            trainer = Trainer(model, train_loader, val_loader, test_loader, seed_config)
 
-            # 执行训练
             trainer.run()
-
-            # 执行测试并获取多维指标字典
             metrics_dict = trainer.test(class_names)
+            per_seed.append({'seed': current_seed, **metrics_dict})
 
-            # 记录当前种子的指标
-            metrics_history['accuracy'].append(metrics_dict['accuracy'])
-            metrics_history['precision'].append(metrics_dict['precision'])
-            metrics_history['recall'].append(metrics_dict['recall'])
-            metrics_history['f1'].append(metrics_dict['f1'])
-
-            # 如果你的 trainer.py 已经加入了 Brier Score 和 RRMSE，则一并记录
-            if 'brier_score' in metrics_dict and 'rrmse' in metrics_dict:
-                metrics_history['brier_score'].append(metrics_dict['brier_score'])
-                metrics_history['rrmse'].append(metrics_dict['rrmse'])
-
-            # 记录参数量 (参数量是固定的，每次循环覆盖即可)
-            params = metrics_dict['params']
+            # 每个 seed 结束后立即更新汇总 (会话中断也不会丢失已完成的结果)
+            summary = summarize_model(model_dir, model_name, per_seed, class_names)
+            write_run_summary(run_dir, summaries + [summary], config)
 
             # 清理显存，防止下一个循环 OOM
-            del trainer
-            del model
-            del train_loader
-            del val_loader
-            del test_loader
-            torch.cuda.empty_cache()
-            print(f"✨ 第 {i + 1} 次实验执行完毕，显存已清理。")
+            del trainer, model, train_loader, val_loader, test_loader
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            print(f"✨ 第 {i + 1} 次实验执行完毕 (acc={metrics_dict['accuracy']:.4f})，显存已清理。")
 
-        # 计算 5 次实验的均值和标准差
-        results_summary[model_name] = {
-            'acc_mean': np.mean(metrics_history['accuracy']) * 100,
-            'acc_std': np.std(metrics_history['accuracy']) * 100,
-            'pre_mean': np.mean(metrics_history['precision']) * 100,
-            'pre_std': np.std(metrics_history['precision']) * 100,
-            'rec_mean': np.mean(metrics_history['recall']) * 100,
-            'rec_std': np.std(metrics_history['recall']) * 100,
-            'f1_mean': np.mean(metrics_history['f1']) * 100,
-            'f1_std': np.std(metrics_history['f1']) * 100,
-            'params': params
-        }
+        summaries.append(summary)
+        print(f"\n🎉 {model_name} {len(seed_list)}次完整评估结束！平均 Accuracy: "
+              f"{summary['accuracy_mean']:.2f} ± {summary['accuracy_std']:.2f}%\n")
 
-        if len(metrics_history['brier_score']) > 0:
-            results_summary[model_name]['bs_mean'] = np.mean(metrics_history['brier_score'])
-            results_summary[model_name]['rrmse_mean'] = np.mean(metrics_history['rrmse'])
-
-        print(
-            f"\n🎉 {model_name} {len(seed_list)}次完整评估结束！平均 Accuracy: {results_summary[model_name]['acc_mean']:.2f} ± {results_summary[model_name]['acc_std']:.2f}%\n")
-
-    # 打印最终性能排行榜
-    print("\n" + "🏆" * 40)
-    print(
-        f"                              最终模型性能对比排行榜 ({len(seed_list)}次独立实验均值 ± 标准差)                              ")
-    print("🏆" * 40)
-
-    # 按准确率均值从高到低排序
-    sorted_results = sorted(results_summary.items(), key=lambda item: item[1]['acc_mean'], reverse=True)
-
-    # 打印表头
-    print(f"  {'Rank':<4} | {'Model Name':<15} | {'Accuracy (%)':<15} | {'F1-Score (%)':<15} | {'Parameters':<10}")
-    print("-" * 75)
-    for rank, (name, metrics) in enumerate(sorted_results, 1):
-        acc_str = f"{metrics['acc_mean']:>5.2f} ± {metrics['acc_std']:<4.2f}"
-        f1_str = f"{metrics['f1_mean']:>5.2f} ± {metrics['f1_std']:<4.2f}"
-        params = metrics['params']
-        print(f"  Top {rank}: | {name:<15} | {acc_str:<15} | {f1_str:<15} | {params:>10,}")
-    print("=" * 75)
-
-    # 将汇总结果写入总日志文件
-    summary_path = os.path.join(config['log_dir'], "experiment_summary.txt")
-    with open(summary_path, "w", encoding="utf-8") as f:
-        f.write(f"模型对比实验最终结果 ({len(seed_list)}次独立实验)\n")
-        f.write("=" * 110 + "\n")
-        f.write(
-            f"{'Rank':<4} | {'Model Name':<15} | {'Accuracy (%)':<15} | {'Precision (%)':<15} | {'Recall (%)':<15} | {'F1-Score (%)':<15} | {'Parameters':<10}\n")
-        f.write("-" * 110 + "\n")
-
-        for rank, (name, metrics) in enumerate(sorted_results, 1):
-            acc_str = f"{metrics['acc_mean']:>5.2f} ± {metrics['acc_std']:<4.2f}"
-            pre_str = f"{metrics['pre_mean']:>5.2f} ± {metrics['pre_std']:<4.2f}"
-            rec_str = f"{metrics['rec_mean']:>5.2f} ± {metrics['rec_std']:<4.2f}"
-            f1_str = f"{metrics['f1_mean']:>5.2f} ± {metrics['f1_std']:<4.2f}"
-            params = metrics['params']
-
-            f.write(
-                f"Top {rank} | {name:<15} | {acc_str:<15} | {pre_str:<15} | {rec_str:<15} | {f1_str:<15} | {params:>10,}\n")
-
-        # 如果包含额外指标，则追加打印
-        if 'bs_mean' in sorted_results[0][1]:
-            f.write("\n" + "=" * 50 + "\n")
-            f.write("额外指标分析 (Error Magnitude Metrics)\n")
-            f.write("-" * 50 + "\n")
-            f.write(f"{'Model Name':<15} | {'Brier Score':<15} | {'RRMSE':<15}\n")
-            f.write("-" * 50 + "\n")
-            for name, metrics in sorted_results:
-                f.write(f"{name:<15} | {metrics['bs_mean']:<15.4f} | {metrics['rrmse_mean']:<15.4f}\n")
-
-    print(f"📄 详细汇总报告已保存至: {summary_path}")
+    text = write_run_summary(run_dir, summaries, config)
+    print("\n" + "=" * 75)
+    print(text)
+    print(f"📄 详细汇总报告已保存至: {os.path.abspath(run_dir)}")
 
 
 if __name__ == "__main__":
