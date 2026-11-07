@@ -47,6 +47,10 @@ PREPROCESS = {
         'hamming': {'window': 5},                 # độ dài cửa sổ Hamming (số mẫu)
         'kalman': {'q_ratio': 1.0},               # Q/R; nhỏ hơn -> làm mượt mạnh hơn
     },
+    # Chuẩn hoá sau khi lọc: 'minmax' (min/max toàn cục của tập train, tự thêm) | 'none' (giữ giá trị
+    # thô; repo gốc không có data loader, bài báo không nhắc chuẩn hoá). Lưu ý noise_std là độ lớn
+    # tuyệt đối: với 'none' (UT-HAR thô std ~5.9) jitter 0.02 yếu hơn nhiều so với khi minmax.
+    'normalize': 'minmax',
 }
 
 
@@ -113,6 +117,7 @@ def dataset_kwargs(cfg):
         'time_steps': cfg['time_steps'],
         'filters': cfg.get('filters', []),
         'filter_params': cfg.get('filter_params', {}),
+        'normalize': cfg.get('normalize', 'minmax'),
     }
 
 
@@ -126,4 +131,6 @@ def add_common_args(parser):
     parser.add_argument('--filters', nargs='+', default=None,
                         choices=['lowpass', 'hamming', 'kalman', 'none'],
                         help="bộ lọc tiền xử lý (mặc định theo config.PREPROCESS); 'none' = dữ liệu thô")
+    parser.add_argument('--normalize', default=None, choices=['minmax', 'none'],
+                        help="chuẩn hoá sau lọc (mặc định theo config.PREPROCESS); 'none' = không chuẩn hoá")
     return parser

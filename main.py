@@ -58,7 +58,7 @@ def main():
     # main.py 原本默认 150 轮 (配合 StepLR(20) 平滑衰减)，可用 --epochs 覆盖
     config = build_config(args.dataset, data_path=args.data_path, epochs=args.epochs or 150,
                           batch_size=args.batch_size, lr=args.lr, device=args.device,
-                          filters=args.filters)
+                          filters=args.filters, normalize=args.normalize)
     class_names = config['class_names']
 
     print(f"🖥️ 当前使用的计算设备: {config['device'].upper()}")

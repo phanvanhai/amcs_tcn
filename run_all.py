@@ -146,6 +146,7 @@ def write_run_summary(run_dir, summaries, config):
              f"StepLR({config['lr_step']}, {config['lr_gamma']}) | early stop: {config['early_stop_patience']}",
              f"Filters: {' -> '.join(config.get('filters') or []) or 'none (raw)'} | "
              f"params: {json.dumps({k: v for k, v in config.get('filter_params', {}).items() if k in (config.get('filters') or [])})}",
+             f"Normalize: {config.get('normalize', 'minmax')} | noise_std: {config.get('noise_std')}",
              '', '=== Kết quả (mean ± std qua các seed, std với ddof=0) ===']
     for s in summaries:
         lines.append(f"\n{s['model']}  (seeds: {s['seeds']})")
@@ -185,7 +186,7 @@ def main():
     # 配置见 config.py (默认 100 轮，严格对齐论文)
     config = build_config(args.dataset, data_path=args.data_path, epochs=args.epochs,
                           batch_size=args.batch_size, lr=args.lr, device=args.device,
-                          filters=args.filters)
+                          filters=args.filters, normalize=args.normalize)
     class_names = config['class_names']
 
     # 定义要求的不同随机种子 (默认 5 个)

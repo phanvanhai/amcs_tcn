@@ -9,8 +9,10 @@ The last axis must be antenna-major: [ant1 sub1..S | ant2 sub1..S | ...]
 Each sample is returned as (antennas, time_steps, subcarriers).
 
 Pipeline: optional denoising (datasets/preprocess.py: low-pass -> Hamming -> Kalman, per sample)
-then min-max scaling with the TRAIN split's min/max (computed after filtering) applied to every
-split (SenseFi normalizes each split with its own statistics, which leaks test info).
+then optional scaling (normalize='minmax'): min-max with the TRAIN split's global min/max (computed
+after filtering) applied to every split (SenseFi normalizes each split with its own statistics, which
+leaks test info). normalize='none' feeds the (filtered) values as-is; the author's repo ships no
+loader and the paper names no normalization, so 'none' is the closest to the original code.
 """
 import json
 import os
@@ -47,9 +49,11 @@ def _load_filtered(data_path, split, time_steps, filters, filter_params):
 
 class CSIDataset(Dataset):
     def __init__(self, data_path, split, antennas=3, subcarriers=30, time_steps=250,
-                 filters=(), filter_params=None):
+                 filters=(), filter_params=None, normalize='minmax'):
         if split not in ('train', 'val', 'test'):
             raise ValueError(f"split must be 'train', 'val' or 'test', got {split!r}")
+        if normalize not in ('minmax', 'none'):
+            raise ValueError(f"normalize must be 'minmax' or 'none', got {normalize!r}")
         filters, filter_params = list(filters or []), filter_params or {}
 
         x_raw, _ = _load_raw(data_path, split)
@@ -60,9 +64,10 @@ class CSIDataset(Dataset):
                              f"(time_steps={time_steps}, antennas={antennas}, subcarriers={subcarriers})")
 
         x, y = _load_filtered(data_path, split, time_steps, filters, filter_params)
-        x_train, _ = _load_filtered(data_path, 'train', time_steps, filters, filter_params)
-        x_min, x_max = float(x_train.min()), float(x_train.max())
-        x = (x - x_min) / (x_max - x_min)
+        if normalize == 'minmax':
+            x_train, _ = _load_filtered(data_path, 'train', time_steps, filters, filter_params)
+            x_min, x_max = float(x_train.min()), float(x_train.max())
+            x = (x - x_min) / (x_max - x_min)
 
         # (N, T, A*S) -> (N, T, A, S) -> (N, A, T, S)
         x = x.reshape(n, time_steps, antennas, subcarriers).transpose(0, 2, 1, 3)
