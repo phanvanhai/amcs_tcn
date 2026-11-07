@@ -134,7 +134,8 @@ Hai giai đoạn:
    và mọi quyết định điều chỉnh đều dựa vào giai đoạn này, không nhìn vào test. Hiện chạy seed 42.
    Khi có thêm seed thì báo cáo mean ± std qua các seed.
 2. **Final test:** chạy một lần duy nhất ở bước cuối, seed 42. Train như cũ, rồi đánh giá checkpoint
-   (chọn theo val) trên **test**. Sau khi xem kết quả test thì không điều chỉnh gì thêm.
+   (chọn theo val) trên **test**; cùng checkpoint đó cũng được đo trên val để đối chiếu, tất cả trong
+   một lần chạy. Sau khi xem kết quả test thì không điều chỉnh gì thêm.
 
 Những mục thuộc về từng mô hình (ghi rõ trong báo cáo của mô hình đó, không phải thiết lập chung):
 early stopping, LR scheduler, augmentation, class weights, chuẩn hoá input và cách reshape input.

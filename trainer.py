@@ -224,13 +224,17 @@ class Trainer:
             torch.cuda.synchronize()
         return (time.perf_counter() - t0) / n_runs * 1000
 
-    def test(self, class_names):
+    def test(self, class_names, loader=None, subdir=None, title="Test"):
+        """Evaluate best.pth on `loader` (default: test_loader). Files go to log_dir/<subdir> if given."""
+        loader = loader if loader is not None else self.test_loader
+        log_dir = os.path.join(self.log_dir, subdir) if subdir else self.log_dir
+        os.makedirs(log_dir, exist_ok=True)
         self.model.load_state_dict(torch.load(os.path.join(self.save_dir, "best.pth"), map_location=self.device))
         self.model.eval()
         probs_all, labels_all = [], []
 
         with torch.no_grad():
-            for x, y in self.test_loader:
+            for x, y in loader:
                 x = x.to(self.device)
                 out = self.model(x)
                 probs_all.append(F.softmax(out, dim=1).cpu().numpy())
@@ -281,26 +285,26 @@ class Trainer:
             f"Train time:       {self.train_time_s:.1f} s\n"
         )
 
-        with open(os.path.join(self.log_dir, "test_metrics_and_size.txt"), "w", encoding="utf-8") as f:
+        with open(os.path.join(log_dir, "test_metrics_and_size.txt"), "w", encoding="utf-8") as f:
             f.write(test_results_text)
             f.write("\n=== Detailed Classification Report ===\n")
             f.write(report)
-        with open(os.path.join(self.log_dir, "classification_report.txt"), "w", encoding="utf-8") as f:
+        with open(os.path.join(log_dir, "classification_report.txt"), "w", encoding="utf-8") as f:
             f.write(report)
 
-        _write_csv(os.path.join(self.log_dir, "per_class_metrics.csv"),
+        _write_csv(os.path.join(log_dir, "per_class_metrics.csv"),
                    ['class_id', 'class_name', 'precision', 'recall', 'f1', 'support'],
                    [[i, class_names[i], p_c[i], r_c[i], f_c[i], int(s_c[i])] for i in label_ids])
-        _write_csv(os.path.join(self.log_dir, "confusion_matrix.csv"),
+        _write_csv(os.path.join(log_dir, "confusion_matrix.csv"),
                    ['true\\pred'] + list(class_names),
                    [[class_names[i]] + cm[i].tolist() for i in label_ids])
-        _write_csv(os.path.join(self.log_dir, "predictions.csv"),
+        _write_csv(os.path.join(log_dir, "predictions.csv"),
                    ['index', 'true', 'pred', 'correct'] + [f'p_{c}' for c in class_names],
                    [[i, int(labels[i]), int(preds[i]), int(labels[i] == preds[i])] + [f'{p:.6f}' for p in probs[i]]
                     for i in range(len(labels))])
 
         # 5. 在终端打印结果
-        print(f"\n🎯 {self.model_name} Test Results:")
+        print(f"\n🎯 {self.model_name} {title} Results:")
         print(f"   Accuracy:  {acc:.4f}")
         print(f"   Precision: {precision:.4f}")
         print(f"   Recall:    {recall:.4f}")
@@ -310,7 +314,7 @@ class Trainer:
         print(report)
 
         try:
-            self.plot_cm(cm, class_names)
+            self.plot_cm(cm, class_names, log_dir)
         except Exception as e:
             print(f"⚠️ Confusion matrix skipped (Error: {e})")
 
@@ -330,7 +334,7 @@ class Trainer:
             "epochs_trained": len(self.history),
             "train_time_s": float(self.train_time_s),
         }
-        with open(os.path.join(self.log_dir, "metrics.json"), "w", encoding="utf-8") as f:
+        with open(os.path.join(log_dir, "metrics.json"), "w", encoding="utf-8") as f:
             json.dump(metrics, f, indent=2)
         return metrics
 
@@ -350,14 +354,15 @@ class Trainer:
         plt.savefig(os.path.join(self.log_dir, "curve.png"))
         plt.close()
 
-    def plot_cm(self, cm, class_names):
+    def plot_cm(self, cm, class_names, out_dir=None):
+        out_dir = out_dir or self.log_dir
         # 原始计数
         plt.figure(figsize=(10, 8))
         sns.heatmap(cm, annot=True, fmt='d', cmap='viridis', xticklabels=class_names, yticklabels=class_names)
         plt.title(f"{self.model_name} Confusion Matrix")
         plt.ylabel('True Label')
         plt.xlabel('Predicted Label')
-        plt.savefig(os.path.join(self.log_dir, "cm.png"), bbox_inches='tight')
+        plt.savefig(os.path.join(out_dir, "cm.png"), bbox_inches='tight')
         plt.close()
 
         # 按行归一化 (与论文图 9 相同的表示方式)
@@ -368,5 +373,5 @@ class Trainer:
         plt.title(f"{self.model_name} Confusion Matrix (normalized)")
         plt.ylabel('True Label')
         plt.xlabel('Predicted Label')
-        plt.savefig(os.path.join(self.log_dir, "cm_normalized.png"), bbox_inches='tight')
+        plt.savefig(os.path.join(out_dir, "cm_normalized.png"), bbox_inches='tight')
         plt.close()

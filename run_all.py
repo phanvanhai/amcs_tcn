@@ -3,7 +3,8 @@
 Hai chế độ (model luôn được chọn theo best val accuracy, có early stop trên val):
     --mode dev    (mặc định) seed config['dev_seeds'] (hiện [42]) -> metric đo trên VAL. Tập test
                   không được nạp, dùng cho mọi điều chỉnh/so sánh.
-    --mode final  1 lần, seed config['final_seed'] (42) -> metric đo trên TEST. Chạy một lần cuối cùng.
+    --mode final  1 lần, seed config['final_seed'] (42): train, chọn checkpoint theo val rồi đo trên
+                  TEST; cùng checkpoint đó cũng được đo trên VAL (file trong seed_<s>/val/).
 
 Cấu trúc thư mục kết quả:
 results/<YYYYmmdd-HHMMSS>_<dataset>/
@@ -111,6 +112,10 @@ def summarize_model(model_dir, model_name, per_seed, class_names):
         summary[k + '_mean'], summary[k + '_std'] = (v * 100 for v in mean_std([r[k] for r in per_seed]))
     for k in RAW_METRICS:
         summary[k + '_mean'], summary[k + '_std'] = mean_std([r[k] for r in per_seed])
+    if 'val_accuracy' in per_seed[-1]:  # mode final: cùng checkpoint, đo thêm trên val
+        for k in PCT_METRICS:
+            summary[f'val_{k}_mean'], summary[f'val_{k}_std'] = (
+                v * 100 for v in mean_std([r[f'val_{k}'] for r in per_seed]))
 
     # 每个类别的 precision / recall / f1 在各 seed 间的 mean ± std
     per_class = {}
@@ -161,6 +166,9 @@ def write_run_summary(run_dir, summaries, config):
         lines.append(f"\n{s['model']}  (seeds: {s['seeds']})")
         for k in PCT_METRICS:
             lines.append(f"  {k:<10}: {s[k + '_mean']:6.2f} ± {s[k + '_std']:.2f} %")
+        if 'val_accuracy_mean' in s:
+            lines.append('  VAL (cùng checkpoint): ' + ' | '.join(
+                f"{k} {s[f'val_{k}_mean']:.2f} ± {s[f'val_{k}_std']:.2f}" for k in PCT_METRICS))
         lines.append(f"  {'brier':<10}: {s['brier_score_mean']:.4f} ± {s['brier_score_std']:.4f}")
         lines.append(f"  {'rrmse':<10}: {s['rrmse_mean']:.4f} ± {s['rrmse_std']:.4f}")
         lines.append(f"  params    : {s['params']:,} ({s['size_mb']:.3f} MB) | latency: "
@@ -268,7 +276,10 @@ def main():
             trainer = Trainer(model, train_loader, val_loader, eval_loader, seed_config)
 
             trainer.run()
-            metrics_dict = trainer.test(class_names)
+            metrics_dict = trainer.test(class_names, title=config['eval_split'].upper())
+            if args.mode == 'final':  # cùng checkpoint, đo thêm trên val (file trong seed_<s>/val/)
+                val_metrics = trainer.test(class_names, loader=val_loader, subdir='val', title='VAL')
+                metrics_dict.update({f'val_{k}': val_metrics[k] for k in PCT_METRICS})
             per_seed.append({'seed': current_seed, **metrics_dict})
 
             # 每个 seed 结束后立即更新汇总 (会话中断也不会丢失已完成的结果)

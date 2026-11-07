@@ -44,7 +44,7 @@ recall / F1.
 
 ```
 python run_all.py --dataset SSHAR_ESP --filters none --mode dev     # seed 42 (config dev_seeds) -> VAL
-python run_all.py --dataset SSHAR_ESP --filters none --mode final   # seed 42 -> metrics on TEST, once
+python run_all.py --dataset SSHAR_ESP --filters none --mode final   # seed 42 -> TEST (+ VAL of the same checkpoint)
 ```
 
 Use `--mode dev` for every comparison / tuning; run `--mode final` only once at the end.
