@@ -24,6 +24,19 @@ UT_HAR/
 The data is not in this repo. Locally the default path is set in `config.py`; on Kaggle the
 loader searches `/kaggle/input` automatically. Use `--data_path` to point anywhere else.
 
+## Signal preprocessing
+
+`datasets/preprocess.py` implements the paper's serial denoising (low-pass -> Hamming -> Kalman,
+along time, per sample). Defaults and parameters are in `config.PREPROCESS` (the paper gives none).
+Select filters with `--filters`, e.g. the Fig. 10 ablation:
+
+```
+python run_all.py --filters none
+python run_all.py --filters lowpass
+python run_all.py --filters lowpass hamming
+python run_all.py                      # lowpass hamming kalman (default)
+```
+
 ## Run on Kaggle
 
 1. Upload the `UT_HAR` folder as a Kaggle Dataset (or use an existing public one) and add it to the notebook.

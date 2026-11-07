@@ -47,8 +47,9 @@ from models.amcs_tcn_fc import AMCS_TCN_FC
 # from models.baselines.cnn_gru_cnn import CNN_GRU_CNN
 from config import build_config, model_kwargs, dataset_kwargs, add_common_args
 
-# Số liệu bài báo (Zhang et al. 2026) trên dataset 10 lớp của họ, dùng để tham chiếu.
+# Số liệu bài báo (Zhang et al. 2026) trên public dataset, dùng để tham chiếu.
 # Table 3 (AMCS-TCN, 5 seed, mean ± std, %), Table 2 (AMCS+FC, 1 lần), Table 5 (RRMSE, Brier).
+# Lưu ý: bài báo tính RRMSE = sqrt(10 * BS) (coi là 10 lớp) -> so Brier thay vì RRMSE.
 PAPER_REFERENCE = {
     'AMCS-TCN (GAP), Table 3': {'accuracy': (98.85, 0.12), 'precision': (98.78, 0.15),
                                 'recall': (98.66, 0.18), 'f1': (98.68, 0.14)},
@@ -143,6 +144,8 @@ def write_run_summary(run_dir, summaries, config):
              f"Data path: {config['data_path']}",
              f"Epochs: {config['epochs']} | batch: {config['batch_size']} | lr: {config['lr']} | "
              f"StepLR({config['lr_step']}, {config['lr_gamma']}) | early stop: {config['early_stop_patience']}",
+             f"Filters: {' -> '.join(config.get('filters') or []) or 'none (raw)'} | "
+             f"params: {json.dumps({k: v for k, v in config.get('filter_params', {}).items() if k in (config.get('filters') or [])})}",
              '', '=== Kết quả (mean ± std qua các seed, std với ddof=0) ===']
     for s in summaries:
         lines.append(f"\n{s['model']}  (seeds: {s['seeds']})")
@@ -154,7 +157,7 @@ def write_run_summary(run_dir, summaries, config):
                      f"{s['latency_ms_mean']:.2f} ms | best epoch: {s['best_epoch_mean']:.1f} | "
                      f"epochs: {s['epochs_trained_mean']:.1f} | train time: {s['train_time_s_mean']:.0f} s/seed")
 
-    lines += ['', '=== Số liệu bài báo (dataset 10 lớp riêng của tác giả, KHÔNG phải UT-HAR) ===']
+    lines += ['', '=== Số liệu bài báo (public dataset; split/tiền xử lý có thể khác) ===']
     for name, vals in PAPER_REFERENCE.items():
         parts = [f"{k}={m}" + (f" ± {sd}" if sd is not None else '') for k, (m, sd) in vals.items()]
         lines.append(f"  {name}: " + ', '.join(parts))
@@ -181,7 +184,8 @@ def main():
 
     # 配置见 config.py (默认 100 轮，严格对齐论文)
     config = build_config(args.dataset, data_path=args.data_path, epochs=args.epochs,
-                          batch_size=args.batch_size, lr=args.lr, device=args.device)
+                          batch_size=args.batch_size, lr=args.lr, device=args.device,
+                          filters=args.filters)
     class_names = config['class_names']
 
     # 定义要求的不同随机种子 (默认 5 个)

@@ -8,7 +8,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from tqdm import tqdm
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
@@ -110,7 +109,7 @@ class Trainer:
         total_loss = 0.0
         preds_all, labels_all = [], []
 
-        for x, y in tqdm(self.train_loader, desc=f"Training {self.model_name}"):
+        for x, y in self.train_loader:
             x, y = x.to(self.device), y.to(self.device)
 
             # 数据增强 (Jittering)。给 CSI 信号加入微小的动态高斯噪声
@@ -173,10 +172,6 @@ class Trainer:
             self.train_accs.append(train_acc)
             self.val_accs.append(val_acc)
 
-            print(f"[Epoch {epoch + 1:2d}] LR: {current_lr:.6f} | "
-                  f"Train loss: {train_loss:.4f} acc: {train_acc:.4f} | "
-                  f"Val loss: {val_loss:.4f} acc: {val_acc:.4f}")
-
             # 调度器更新
             self.scheduler.step()
 
@@ -187,15 +182,19 @@ class Trainer:
                 self.best_epoch = epoch + 1
                 torch.save(self.model.state_dict(), os.path.join(self.save_dir, "best.pth"))
                 self.early_stop_counter = 0  # 只要准确率创新高，就重置耐心值
-                print(f"✅ Best model saved (Val Acc: {val_acc:.4f})")
             else:
                 self.early_stop_counter += 1
-                print(f"⚠️ Early stop counter: {self.early_stop_counter}/{self.early_stop_patience}")
                 if self.early_stop_counter >= self.early_stop_patience:
                     self.early_stop = True
 
+            epoch_time = time.time() - t_epoch
             self.history.append([epoch + 1, current_lr, train_loss, train_acc, val_loss, val_acc,
-                                 int(is_best), round(time.time() - t_epoch, 3)])
+                                 int(is_best), round(epoch_time, 3)])
+
+            # 每个 epoch 只输出一行
+            status = "* best" if is_best else f"es {self.early_stop_counter}/{self.early_stop_patience}"
+            print(f"[Epoch {epoch + 1:3d}] lr {current_lr:.6f} | train {train_loss:.4f}/{train_acc:.4f} | "
+                  f"val {val_loss:.4f}/{val_acc:.4f} | {epoch_time:.1f}s | {status}", flush=True)
 
         self.train_time_s = time.time() - t_start
 

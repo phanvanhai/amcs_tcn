@@ -37,6 +37,18 @@ TRAIN = {
     'log_dir': 'logs',
 }
 
+# Tiền xử lý tín hiệu theo bài báo (mục "CSI processing"): Low-pass -> Hamming -> Kalman, nối tiếp
+# theo trục thời gian. Bài báo không cho tham số -> giá trị dưới đây là do mình chọn, có thể chỉnh.
+# Đổi khi chạy: --filters lowpass hamming kalman | --filters none (ablation như Fig. 10)
+PREPROCESS = {
+    'filters': ['lowpass', 'hamming', 'kalman'],
+    'filter_params': {
+        'lowpass': {'cutoff': 0.2, 'order': 4},   # cutoff: tỉ lệ so với Nyquist (0..1)
+        'hamming': {'window': 5},                 # độ dài cửa sổ Hamming (số mẫu)
+        'kalman': {'q_ratio': 1.0},               # Q/R; nhỏ hơn -> làm mượt mạnh hơn
+    },
+}
+
 
 def find_data_path(search_root='/kaggle/input', max_depth=5):
     """Tìm thư mục chứa data/X_train.csv và label/y_train.csv (dùng trên Kaggle)."""
@@ -63,8 +75,10 @@ def build_config(dataset='UT_HAR', **overrides):
 
     if dataset not in DATASETS:
         raise ValueError(f"Unknown dataset {dataset!r}, available: {list(DATASETS)}")
-    cfg = {**TRAIN, **DATASETS[dataset], 'dataset': dataset}
+    cfg = {**TRAIN, **PREPROCESS, **DATASETS[dataset], 'dataset': dataset}
     cfg.update({k: v for k, v in overrides.items() if v is not None})
+    if 'none' in (cfg.get('filters') or []):
+        cfg['filters'] = []
 
     # Đường dẫn mặc định không tồn tại (vd. trên Kaggle) -> tự tìm trong /kaggle/input
     if overrides.get('data_path') is None and not Path(cfg['data_path']).exists():
@@ -97,6 +111,8 @@ def dataset_kwargs(cfg):
         'antennas': cfg['antennas'],
         'subcarriers': cfg['subcarriers'],
         'time_steps': cfg['time_steps'],
+        'filters': cfg.get('filters', []),
+        'filter_params': cfg.get('filter_params', {}),
     }
 
 
@@ -107,4 +123,7 @@ def add_common_args(parser):
     parser.add_argument('--batch_size', type=int, default=None)
     parser.add_argument('--lr', type=float, default=None)
     parser.add_argument('--device', default=None)
+    parser.add_argument('--filters', nargs='+', default=None,
+                        choices=['lowpass', 'hamming', 'kalman', 'none'],
+                        help="bộ lọc tiền xử lý (mặc định theo config.PREPROCESS); 'none' = dữ liệu thô")
     return parser
