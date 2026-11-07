@@ -1,5 +1,10 @@
 """Chạy mô hình với nhiều seed, lưu chi tiết từng seed và bảng tổng hợp mean ± std.
 
+Hai chế độ (model luôn được chọn theo best val accuracy, có early stop trên val):
+    --mode dev    (mặc định) 5 seed config['dev_seeds'] -> metric đo trên VAL (mean ± std). Tập test
+                  không được nạp, dùng cho mọi điều chỉnh/so sánh.
+    --mode final  1 lần, seed config['final_seed'] (42) -> metric đo trên TEST. Chạy một lần cuối cùng.
+
 Cấu trúc thư mục kết quả:
 results/<YYYYmmdd-HHMMSS>_<dataset>/
     config.json, environment.json
@@ -149,9 +154,9 @@ def write_run_summary(run_dir, summaries, config):
              f"Filters: {' -> '.join(config.get('filters') or []) or 'none (raw)'} | "
              f"params: {json.dumps({k: v for k, v in config.get('filter_params', {}).items() if k in (config.get('filters') or [])})}",
              f"Normalize: {config.get('normalize', 'minmax')} | noise_std: {config.get('noise_std')}",
-             *([] if config.get('use_val', True) else
-               ["⚠ Không có tập val riêng: best epoch / early stop chọn trên TEST -> kết quả lạc quan"]),
-             '', '=== Kết quả (mean ± std qua các seed, std với ddof=0) ===']
+             f"Mode: {config['mode']} -> metrics on {config['eval_split'].upper()} "
+             f"(model = best val accuracy) | split sizes: {config['split_sizes']}",
+             '', f"=== Kết quả trên {config['eval_split'].upper()} (mean ± std qua các seed, std với ddof=0) ==="]
     for s in summaries:
         lines.append(f"\n{s['model']}  (seeds: {s['seeds']})")
         for k in PCT_METRICS:
@@ -183,7 +188,10 @@ def write_run_summary(run_dir, summaries, config):
 def main():
     import argparse
     parser = add_common_args(argparse.ArgumentParser())
-    parser.add_argument('--seeds', type=int, nargs='+', default=[42, 3407, 1024, 2024, 0])
+    parser.add_argument('--mode', default='dev', choices=['dev', 'final'],
+                        help="dev: 5 seed, đánh giá trên val | final: seed 42, đánh giá trên test")
+    parser.add_argument('--seeds', type=int, nargs='+', default=None,
+                        help="ghi đè seed (mặc định: dev -> config['dev_seeds'], final -> config['final_seed'])")
     parser.add_argument('--results_dir', default='results', help='thư mục gốc chứa kết quả')
     parser.add_argument('--run_name', default=None, help='tên thư mục lần chạy (mặc định: thời gian_dataset)')
     args = parser.parse_args()
@@ -195,16 +203,14 @@ def main():
                           time_steps=args.time_steps)
     class_names = config['class_names']
 
-    # 定义要求的不同随机种子 (默认 5 个)
-    seed_list = args.seeds
+    # dev: 5 seed -> val | final: seed 42 -> test
+    seed_list = args.seeds or (config['dev_seeds'] if args.mode == 'dev' else [config['final_seed']])
+    config['mode'] = args.mode
+    config['eval_split'] = 'val' if args.mode == 'dev' else 'test'
 
-    run_name = args.run_name or f"{datetime.now():%Y%m%d-%H%M%S}_{config['dataset']}"
+    run_name = args.run_name or f"{datetime.now():%Y%m%d-%H%M%S}_{config['dataset']}_{args.mode}"
     run_dir = os.path.join(args.results_dir, run_name)
     os.makedirs(run_dir, exist_ok=True)
-    with open(os.path.join(run_dir, 'config.json'), 'w', encoding='utf-8') as f:
-        json.dump({**config, 'seeds': seed_list}, f, indent=2)
-    with open(os.path.join(run_dir, 'environment.json'), 'w', encoding='utf-8') as f:
-        json.dump(environment_info(), f, indent=2)
 
     print(f"🖥️ 当前使用的计算设备: {config['device'].upper()}")
     print(f"📁 Results: {os.path.abspath(run_dir)}")
@@ -219,14 +225,19 @@ def main():
     ]
 
     # 数据只加载一次 (数据集本身不依赖随机种子)
+    # Model luôn chọn theo val. Tập đánh giá: dev -> val (test không được nạp), final -> test.
     train_set = CSIDataset(config['data_path'], 'train', **dataset_kwargs(config))
-    test_set = CSIDataset(config['data_path'], 'test', **dataset_kwargs(config))
-    # Không có tập val riêng (config 'use_val': False) -> dùng test để chọn best epoch / early stop
-    val_set = (CSIDataset(config['data_path'], 'val', **dataset_kwargs(config))
-               if config.get('use_val', True) else test_set)
+    val_set = CSIDataset(config['data_path'], 'val', **dataset_kwargs(config))
+    eval_set = val_set if args.mode == 'dev' else CSIDataset(config['data_path'], 'test', **dataset_kwargs(config))
     clear_cache()  # dataset đã giữ bản cần dùng, bỏ bản thô/đã lọc để tiết kiệm RAM
-    print(f"📦 train/val/test: {len(train_set)}/{len(val_set)}/{len(test_set)} | "
-          f"sample shape: {tuple(train_set.x.shape[1:])} (antennas, T, subcarriers)")
+    config['split_sizes'] = {'train': len(train_set), 'val': len(val_set),
+                             **({'test': len(eval_set)} if args.mode == 'final' else {})}
+    print(f"📦 mode={args.mode} | sizes: {config['split_sizes']} | eval on {config['eval_split'].upper()} | "
+          f"seeds: {seed_list} | sample shape: {tuple(train_set.x.shape[1:])} (antennas, T, subcarriers)")
+    with open(os.path.join(run_dir, 'config.json'), 'w', encoding='utf-8') as f:
+        json.dump({**config, 'seeds': seed_list}, f, indent=2)
+    with open(os.path.join(run_dir, 'environment.json'), 'w', encoding='utf-8') as f:
+        json.dump(environment_info(), f, indent=2)
 
     summaries = []
 
@@ -249,12 +260,12 @@ def main():
             # DataLoader 在循环内创建，打乱顺序受当前种子控制
             train_loader = DataLoader(train_set, config['batch_size'], shuffle=True)
             val_loader = DataLoader(val_set, config['batch_size'], shuffle=False)
-            test_loader = DataLoader(test_set, config['batch_size'], shuffle=False)
+            eval_loader = DataLoader(eval_set, config['batch_size'], shuffle=False)
 
             # 动态实例化模型与 Trainer，每个 seed 独立输出目录
             seed_config = {**config, 'output_dir': os.path.join(model_dir, f'seed_{current_seed}')}
             model = ModelClass(**model_kwargs(config))
-            trainer = Trainer(model, train_loader, val_loader, test_loader, seed_config)
+            trainer = Trainer(model, train_loader, val_loader, eval_loader, seed_config)
 
             trainer.run()
             metrics_dict = trainer.test(class_names)
@@ -265,7 +276,7 @@ def main():
             write_run_summary(run_dir, summaries + [summary], config)
 
             # 清理显存，防止下一个循环 OOM
-            del trainer, model, train_loader, val_loader, test_loader
+            del trainer, model, train_loader, val_loader, eval_loader
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             print(f"✨ 第 {i + 1} 次实验执行完毕 (acc={metrics_dict['accuracy']:.4f})，显存已清理。")

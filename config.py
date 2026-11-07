@@ -27,7 +27,7 @@ DATASETS = {
     },
     # SSHAR, thiết bị ESP32: 3 receiver x 1 anten, 56 subcarrier, 1000 điểm (5 s).
     # room_XX/esp/rx_YY/subject_ZZ/amp_actAA_posBB_dirCC_repDD.npy, mỗi file (1, 56, 1000).
-    # 10 người x 8 hành động x 80 mẫu = 6400 mẫu (800/lớp). Split theo lần lặp như benchmark: 80/20.
+    # 10 người x 8 hành động x 80 mẫu = 6400 mẫu (800/lớp). Split theo lần lặp 7:1:2 -> 4480/640/1280.
     'SSHAR_ESP': {
         'format': 'sshar',
         'data_path': str((_ROOT / '../../../CodeForPaper/benchmark/data/sshar_amp_interp').resolve()),
@@ -37,19 +37,18 @@ DATASETS = {
         'subcarriers': 56,
         'raw_time_steps': 1000,
         # Độ dài đưa vào model; nhỏ hơn 1000 thì lấy trung bình khối (vd. --time_steps 250).
-        'time_steps': 1000,
-        'batch_size': 32,       # T=1000: batch 64 cần ~22 GB activation (tràn GPU 16 GB), batch 32 ~11 GB
-        # Tạm thời chỉ chia train/test (80/20): tập test kiêm luôn vai trò val (chọn best epoch +
-        # early stop) -> kết quả lạc quan. Đặt True để tách val (rep cuối của train) -> ~70/10/20.
-        'use_val': False,
+        'time_steps': 1000,     # T=1000, batch 32: ~11 GB activation khi train
         'class_names': ['act01', 'act02', 'act03', 'act04', 'act05', 'act06', 'act07', 'act08'],
         'class_weights': None,  # dữ liệu cân bằng
         'paper_reference': False,
     },
 }
 
+# Thiết lập thí nghiệm chung (benchmark): batch 32, 100 epoch, Adam, chọn model theo best val accuracy,
+# LR theo bài gốc (AMCS-TCN, Table 1: Adam, lr 0.001; bài dùng batch 64). Early stop (patience 10)
+# và StepLR giữ như code gốc của tác giả.
 TRAIN = {
-    'batch_size': 64,
+    'batch_size': 32,
     'lr': 1e-3,
     'epochs': 100,
     'lr_step': 20,             # StepLR step_size
@@ -58,6 +57,9 @@ TRAIN = {
     'noise_std': 0.02,         # độ lớn nhiễu Gaussian (jittering) khi train, 0 để tắt
     'save_dir': 'model',
     'log_dir': 'logs',
+    # Development: 5 lần (5 seed) -> đánh giá trên VAL. Final test: 1 lần (seed 42) -> đánh giá trên TEST.
+    'dev_seeds': [42, 3407, 1024, 2024, 0],
+    'final_seed': 42,
 }
 
 # Tiền xử lý tín hiệu theo bài báo (mục "CSI processing"): Low-pass -> Hamming -> Kalman, nối tiếp
@@ -156,8 +158,7 @@ def dataset_kwargs(cfg):
         'filter_params': cfg.get('filter_params', {}),
         'normalize': cfg.get('normalize', 'minmax'),
         'fmt': cfg['format'],
-        'fmt_kwargs': ({**cfg.get('fmt_kwargs', {}), 'holdout_val': cfg.get('use_val', True)}
-                       if cfg['format'] == 'sshar' else cfg.get('fmt_kwargs', {})),
+        'fmt_kwargs': cfg.get('fmt_kwargs', {}),
     }
 
 

@@ -48,15 +48,15 @@ def main():
     import argparse
     parser = add_common_args(argparse.ArgumentParser())
     # parser.add_argument('--model', default='fc', choices=list(MODELS), help='分类头: fc (默认) 或 gap')
-    parser.add_argument('--seed', type=int, default=3407)
+    parser.add_argument('--seed', type=int, default=42)
     args = parser.parse_args()
 
     # 尝试不同的数字：42, 3407, 114514 等
     set_seed(args.seed)
 
     # ====================== 配置 (见 config.py) ======================
-    # main.py 原本默认 150 轮 (配合 StepLR(20) 平滑衰减)，可用 --epochs 覆盖
-    config = build_config(args.dataset, data_path=args.data_path, epochs=args.epochs or 150,
+    # 1 lần chạy (mặc định seed 42, 100 epoch theo config): chọn model theo val, đánh giá trên test
+    config = build_config(args.dataset, data_path=args.data_path, epochs=args.epochs,
                           batch_size=args.batch_size, lr=args.lr, device=args.device,
                           filters=args.filters, normalize=args.normalize,
                           time_steps=args.time_steps)
@@ -69,10 +69,8 @@ def main():
     # ====================== 数据加载 ======================
     print("📦 正在加载数据集...")
     train_set = CSIDataset(config['data_path'], 'train', **dataset_kwargs(config))
+    val_set = CSIDataset(config['data_path'], 'val', **dataset_kwargs(config))
     test_set = CSIDataset(config['data_path'], 'test', **dataset_kwargs(config))
-    # Không có tập val riêng (config 'use_val': False) -> dùng test để chọn best epoch / early stop
-    val_set = (CSIDataset(config['data_path'], 'val', **dataset_kwargs(config))
-               if config.get('use_val', True) else test_set)
 
     max_label = int(max(s.y.max() for s in (train_set, val_set, test_set)))
     if max_label >= config['num_classes']:

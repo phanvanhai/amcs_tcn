@@ -31,18 +31,23 @@ sshar_amp_interp/room_XX/esp/rx_{00,01,02}/subject_ZZ/amp_actAA_posBB_dirCC_repD
 ```
 
 The 3 ESP32 receivers (1 antenna each) become the 3 AMCS streams: input `(3, T, 56)`, 8 classes
-(act 1..8). Split by repetition as in the benchmark: test = dir0 rep 9-10 / dir!=0 rep 5,
-train = the rest (5120 / 1280, 80/20). For now there is no separate val set (`use_val: False`):
-the test set also picks the best epoch and drives early stopping, so results are optimistic.
-Set `use_val: True` to move dir0 rep 8 / dir!=0 rep 4 into a val split (4160 / 960 / 1280).
+(act 1..8). Split by repetition, exactly 7:1:2 per (subject, class): test = dir0 rep 9-10 /
+dir!=0 rep 5 (same test set as the benchmark), val = dir0 rep 8 / dir!=0 rep 4 of one direction
+(alternating by position), train = the rest -> 4480 / 640 / 1280. Full length `time_steps=1000`
+(`--time_steps 250` averages blocks of 4 samples instead).
 
-Defaults: full length `time_steps=1000` with `batch_size=32` (batch 64 at T=1000 needs ~22 GB of
-activations). `--time_steps 250` averages blocks of 4 samples instead.
+## Experiment protocol
+
+Batch 32, 100 epochs, Adam, lr 0.001 (paper Table 1), model = best val accuracy (early stop
+patience 10 and StepLR(20, 0.5) as in the authors' code). Metrics: accuracy, macro precision /
+recall / F1.
 
 ```
-python run_all.py --dataset SSHAR_ESP --filters none
-python run_all.py --dataset SSHAR_ESP --filters none --time_steps 250 --batch_size 64
+python run_all.py --dataset SSHAR_ESP --filters none --mode dev     # 5 seeds -> metrics on VAL
+python run_all.py --dataset SSHAR_ESP --filters none --mode final   # seed 42 -> metrics on TEST, once
 ```
+
+Use `--mode dev` for every comparison / tuning; run `--mode final` only once at the end.
 
 ## Signal preprocessing
 
@@ -70,8 +75,8 @@ python run_all.py                      # lowpass hamming kalman (default)
 ```
 
 ```python
-!python main.py                 # single run, seed 3407, 150 epochs
-# !python run_all.py            # 5 seeds, 100 epochs, mean ± std
+!python main.py                 # single run, seed 42, 100 epochs, test metrics
+# !python run_all.py            # dev: 5 seeds, val metrics (mean ± std); --mode final: seed 42, test
 # !python main.py --data_path /kaggle/input/<dataset>/UT_HAR --batch_size 32
 ```
 

@@ -10,10 +10,10 @@ Two on-disk formats (config: DATASETS[...]['format']):
 'sshar' (SSHAR ESP / ASUS, one .npy per receiver per recording):
     <data_path>/room_XX/<device>/rx_YY/subject_ZZ/amp_actAA_posBB_dirCC_repDD.npy -> (ant, sub, T)
     The receivers in `rx_list` are stacked into rx * ant streams (ESP32: 3 rx x 1 ant = 3 streams,
-    56 subcarriers). Labels: act in `labels` -> index in that list. Split by repetition, like the
-    benchmark (test = dir0 rep > 8, dir!=0 rep > 4) -> 80 / 20. With holdout_val=True one repetition
-    per group is moved from train to val (val = dir0 rep 8, dir!=0 rep 4) -> ~70 / 10 / 20; with
-    holdout_val=False there is no 'val' split (the caller uses test for validation).
+    56 subcarriers). Labels: act in `labels` -> index in that list. Split by repetition, exactly
+    7:1:2 per (subject, class): test = dir0 rep 9-10 / dir!=0 rep 5 (same test set as the benchmark);
+    val = dir0 rep 8 / dir!=0 rep 4 of one direction (dir01 for odd positions, dir02 for even ones,
+    so both directions are represented); train = the rest. ESP: 4480 / 640 / 1280.
 
 Pipeline (both formats): optional denoising (datasets/preprocess.py, per series, along time, at the
 raw rate) -> optional time downsampling (mean over blocks of raw_T // time_steps samples) ->
@@ -55,15 +55,18 @@ def _load_sensefi(data_path, split, antennas, subcarriers):
     return np.ascontiguousarray(x), y
 
 
-def sshar_split_of(direction, rep, holdout_val=True):
-    """Repetition split: benchmark train/test boundary; optionally last train repetition -> val."""
-    last_train = 8 if direction == 0 else 4
-    if rep > last_train:
+def sshar_split_of(pos, direction, rep):
+    """7:1:2 repetition split (see module docstring)."""
+    if direction == 0:  # 10 repetitions: 1-7 train, 8 val, 9-10 test
+        return 'test' if rep > 8 else 'val' if rep == 8 else 'train'
+    # 2 directions x 5 repetitions: rep 5 test; rep 4 of one direction (alternating by pos) val
+    if rep == 5:
         return 'test'
-    return 'val' if holdout_val and rep == last_train else 'train'
+    val_dir = 1 if pos % 2 else 2
+    return 'val' if rep == 4 and direction == val_dir else 'train'
 
 
-def _sshar_index(data_path, device, rx_list, labels, holdout_val=True):
+def _sshar_index(data_path, device, rx_list, labels):
     """[(split, label_idx, [file per rx])] for every recording present in all receivers."""
     root, label_map, index = Path(data_path), {a: i for i, a in enumerate(labels)}, []
     for room in sorted(p for p in root.iterdir() if p.is_dir() and p.name.startswith('room')):
@@ -75,22 +78,21 @@ def _sshar_index(data_path, device, rx_list, labels, holdout_val=True):
                 m = SSHAR_PATTERN.search(f.name)
                 if m is None or int(m.group(1)) not in label_map:
                     continue
-                act, _, direction, rep = map(int, m.groups())
+                act, pos, direction, rep = map(int, m.groups())
                 files = [room / device / rx / subject.name / f.name for rx in rx_list]
                 if not all(p.is_file() for p in files):
                     raise FileNotFoundError(f"{f.name} missing for some receiver in {rx_list} ({subject})")
-                index.append((sshar_split_of(direction, rep, holdout_val), label_map[act], files))
+                index.append((sshar_split_of(pos, direction, rep), label_map[act], files))
     if not index:
         raise FileNotFoundError(f"No SSHAR files for device={device!r}, rx={rx_list}, labels={labels} "
                                 f"under {data_path}")
     return index
 
 
-def _load_sshar(data_path, split, antennas, subcarriers, device, rx_list, labels, holdout_val=True):
-    items = [(lab, files) for s, lab, files in _sshar_index(data_path, device, rx_list, labels, holdout_val)
-             if s == split]
+def _load_sshar(data_path, split, antennas, subcarriers, device, rx_list, labels):
+    items = [(lab, files) for s, lab, files in _sshar_index(data_path, device, rx_list, labels) if s == split]
     if not items:
-        raise ValueError(f"SSHAR split {split!r} is empty (holdout_val={holdout_val})")
+        raise ValueError(f"SSHAR split {split!r} is empty")
     first = np.load(items[0][1][0])  # (ant, sub, T)
     ant_per_rx, sub, t_raw = first.shape
     if ant_per_rx * len(rx_list) != antennas or sub != subcarriers:
