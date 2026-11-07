@@ -39,7 +39,7 @@ sys.path.append(str(Path(__file__).parent))
 # Windows (cp1252) console/redirect cannot print emoji/Chinese in the logs -> force UTF-8
 for _s in (sys.stdout, sys.stderr):
     if hasattr(_s, 'reconfigure'):  # không có khi chạy bằng %run trong Jupyter/Kaggle notebook
-        _s.reconfigure(encoding='utf-8')
+        _s.reconfigure(encoding='utf-8', line_buffering=True)  # in log ngay, kể cả khi chạy qua pipe (!python)
 
 # 导入数据集和训练器
 from datasets.csi_dataset import CSIDataset, clear_cache
@@ -234,10 +234,13 @@ def main():
 
     # 数据只加载一次 (数据集本身不依赖随机种子)
     # Model luôn chọn theo val. Tập đánh giá: dev -> val (test không được nạp), final -> test.
+    print(f"⏳ Đang nạp dữ liệu ({config['dataset']}, {config['data_path']})...", flush=True)
+    t_load = time.time()
     train_set = CSIDataset(config['data_path'], 'train', **dataset_kwargs(config))
     val_set = CSIDataset(config['data_path'], 'val', **dataset_kwargs(config))
     eval_set = val_set if args.mode == 'dev' else CSIDataset(config['data_path'], 'test', **dataset_kwargs(config))
     clear_cache()  # dataset đã giữ bản cần dùng, bỏ bản thô/đã lọc để tiết kiệm RAM
+    print(f"✅ Nạp dữ liệu xong sau {time.time() - t_load:.0f}s", flush=True)
     config['split_sizes'] = {'train': len(train_set), 'val': len(val_set),
                              **({'test': len(eval_set)} if args.mode == 'final' else {})}
     print(f"📦 mode={args.mode} | sizes: {config['split_sizes']} | eval on {config['eval_split'].upper()} | "

@@ -21,9 +21,13 @@ optional scaling. normalize='minmax' uses the TRAIN split's global min/max (comp
 above) for every split (SenseFi normalizes each split with its own statistics, which leaks test info);
 normalize='none' feeds the values as-is.
 """
+import hashlib
 import json
 import os
 import re
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -35,6 +39,16 @@ from datasets.preprocess import apply_filters
 _cache = {}
 
 SSHAR_PATTERN = re.compile(r'act(\d+)_pos(\d+)_dir(\d+)_rep(\d+)')
+SSHAR_SPLIT_VERSION = 'rep-7:1:2-v1'  # đổi khi sửa sshar_split_of để cache trên đĩa không bị dùng nhầm
+
+# Cache mảng thô của từng split ra đĩa (.npy) để lần chạy sau trong cùng phiên nạp nhanh.
+# Mặc định bật trên Kaggle (/tmp/csi_cache); đặt CSI_CACHE_DIR="" để tắt, hoặc trỏ thư mục khác.
+CACHE_DIR = os.environ.get('CSI_CACHE_DIR', '/tmp/csi_cache' if os.path.isdir('/kaggle/working') else '')
+LOAD_WORKERS = int(os.environ.get('CSI_LOAD_WORKERS', '16'))  # số luồng đọc file song song
+
+
+def _log(msg):
+    print(msg, flush=True)
 
 
 def clear_cache():
@@ -66,30 +80,55 @@ def sshar_split_of(pos, direction, rep):
     return 'val' if rep == 4 and direction == val_dir else 'train'
 
 
+_index_cache = {}
+
+
 def _sshar_index(data_path, device, rx_list, labels):
-    """[(split, label_idx, [file per rx])] for every recording present in all receivers."""
+    """[(split, label_idx, [file per rx])] for every recording present in all receivers.
+
+    Built once per argument set; existence is checked with one directory listing per
+    (receiver, subject) instead of one stat per file (much faster on network file systems).
+    """
+    key = _key(os.path.abspath(data_path), device, rx_list, labels)
+    if key in _index_cache:
+        return _index_cache[key]
     root, label_map, index = Path(data_path), {a: i for i, a in enumerate(labels)}, []
     for room in sorted(p for p in root.iterdir() if p.is_dir() and p.name.startswith('room')):
         first = room / device / rx_list[0]
         if not first.is_dir():
             continue
-        for subject in sorted(p for p in first.iterdir() if p.is_dir() and p.name.startswith('subject')):
-            for f in sorted(subject.glob('*.npy')):
-                m = SSHAR_PATTERN.search(f.name)
+        for subject in sorted(p.name for p in first.iterdir() if p.is_dir() and p.name.startswith('subject')):
+            listing = {rx: set(os.listdir(room / device / rx / subject))
+                       if (room / device / rx / subject).is_dir() else set() for rx in rx_list}
+            for name in sorted(n for n in listing[rx_list[0]] if n.endswith('.npy')):
+                m = SSHAR_PATTERN.search(name)
                 if m is None or int(m.group(1)) not in label_map:
                     continue
                 act, pos, direction, rep = map(int, m.groups())
-                files = [room / device / rx / subject.name / f.name for rx in rx_list]
-                if not all(p.is_file() for p in files):
-                    raise FileNotFoundError(f"{f.name} missing for some receiver in {rx_list} ({subject})")
+                missing = [rx for rx in rx_list if name not in listing[rx]]
+                if missing:
+                    raise FileNotFoundError(f"{name} missing in {missing} ({room.name}/{subject})")
+                files = [room / device / rx / subject / name for rx in rx_list]
                 index.append((sshar_split_of(pos, direction, rep), label_map[act], files))
     if not index:
         raise FileNotFoundError(f"No SSHAR files for device={device!r}, rx={rx_list}, labels={labels} "
                                 f"under {data_path}")
+    _index_cache[key] = index
     return index
 
 
 def _load_sshar(data_path, split, antennas, subcarriers, device, rx_list, labels):
+    cache = None
+    if CACHE_DIR:
+        h = hashlib.md5(_key(os.path.abspath(data_path), split, device, rx_list, labels,
+                             SSHAR_SPLIT_VERSION).encode()).hexdigest()[:12]
+        cache = os.path.join(CACHE_DIR, f'sshar_{device}_{split}_{h}')
+        if os.path.isfile(cache + '_y.npy'):
+            x, y = np.load(cache + '_x.npy'), np.load(cache + '_y.npy')
+            _log(f"   [{split}] loaded from cache {cache}_*.npy: {x.shape}")
+            return x, y
+
+    t0 = time.time()
     items = [(lab, files) for s, lab, files in _sshar_index(data_path, device, rx_list, labels) if s == split]
     if not items:
         raise ValueError(f"SSHAR split {split!r} is empty")
@@ -100,13 +139,29 @@ def _load_sshar(data_path, split, antennas, subcarriers, device, rx_list, labels
                          f"{ant_per_rx * len(rx_list)} streams x {sub} subcarriers, config says "
                          f"antennas={antennas}, subcarriers={subcarriers}")
     x = np.empty((len(items), antennas, t_raw, sub), dtype=np.float32)
-    for i, (_, files) in enumerate(items):
-        for r, f in enumerate(files):
+
+    def read(i):
+        for r, f in enumerate(items[i][1]):
             a = np.load(f)
             if a.shape != first.shape:
                 raise ValueError(f"{f}: shape {a.shape}, expected {first.shape}")
             x[i, r * ant_per_rx:(r + 1) * ant_per_rx] = a.transpose(0, 2, 1)  # (ant, T, sub)
+
+    n, step = len(items), max(1, len(items) // 10)
+    _log(f"   [{split}] reading {n} samples x {len(rx_list)} rx = {n * len(rx_list)} files ({LOAD_WORKERS} threads)...")
+    with ThreadPoolExecutor(max_workers=LOAD_WORKERS) as ex:
+        for done, _ in enumerate(ex.map(read, range(n)), 1):
+            if done % step == 0 or done == n:
+                _log(f"   [{split}] {done}/{n} ({time.time() - t0:.0f}s)")
     y = np.array([lab for lab, _ in items], dtype=np.int64)
+
+    if cache:
+        try:
+            os.makedirs(CACHE_DIR, exist_ok=True)
+            np.save(cache + '_x.npy', x)
+            np.save(cache + '_y.npy', y)  # ghi sau cùng: có _y nghĩa là cache đầy đủ
+        except OSError as e:
+            _log(f"   [{split}] could not write cache ({e})")
     return x, y
 
 
