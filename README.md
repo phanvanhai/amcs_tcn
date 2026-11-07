@@ -24,6 +24,26 @@ UT_HAR/
 The data is not in this repo. Locally the default path is set in `config.py`; on Kaggle the
 loader searches `/kaggle/input` automatically. Use `--data_path` to point anywhere else.
 
+### SSHAR ESP (`--dataset SSHAR_ESP`)
+
+```
+sshar_amp_interp/room_XX/esp/rx_{00,01,02}/subject_ZZ/amp_actAA_posBB_dirCC_repDD.npy   # (1, 56, 1000)
+```
+
+The 3 ESP32 receivers (1 antenna each) become the 3 AMCS streams: input `(3, T, 56)`, 8 classes
+(act 1..8). Split by repetition as in the benchmark: test = dir0 rep 9-10 / dir!=0 rep 5,
+train = the rest (5120 / 1280, 80/20). For now there is no separate val set (`use_val: False`):
+the test set also picks the best epoch and drives early stopping, so results are optimistic.
+Set `use_val: True` to move dir0 rep 8 / dir!=0 rep 4 into a val split (4160 / 960 / 1280).
+
+Defaults: full length `time_steps=1000` with `batch_size=32` (batch 64 at T=1000 needs ~22 GB of
+activations). `--time_steps 250` averages blocks of 4 samples instead.
+
+```
+python run_all.py --dataset SSHAR_ESP --filters none
+python run_all.py --dataset SSHAR_ESP --filters none --time_steps 250 --batch_size 64
+```
+
 ## Signal preprocessing
 
 `datasets/preprocess.py` implements the paper's serial denoising (low-pass -> Hamming -> Kalman,

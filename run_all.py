@@ -36,7 +36,7 @@ for _s in (sys.stdout, sys.stderr):
         _s.reconfigure(encoding='utf-8')
 
 # 导入数据集和训练器
-from datasets.csi_dataset import CSIDataset
+from datasets.csi_dataset import CSIDataset, clear_cache
 from trainer import Trainer
 
 # 仅使用 AMCS_TCN_FC。如需对比其他模型，取消下方 import 的注释并在 model_classes 中启用
@@ -140,13 +140,17 @@ def write_run_summary(run_dir, summaries, config):
                for s in summaries])
 
     lines = [f"Dataset: {config['dataset']} ({config['num_classes']} classes, {config['antennas']} antennas, "
-             f"{config['subcarriers']} subcarriers, T={config['time_steps']})",
+             f"{config['subcarriers']} subcarriers, T={config['time_steps']}"
+             + (f" <- {config['raw_time_steps']} raw" if config.get('raw_time_steps', config['time_steps'])
+                != config['time_steps'] else '') + ')',
              f"Data path: {config['data_path']}",
              f"Epochs: {config['epochs']} | batch: {config['batch_size']} | lr: {config['lr']} | "
              f"StepLR({config['lr_step']}, {config['lr_gamma']}) | early stop: {config['early_stop_patience']}",
              f"Filters: {' -> '.join(config.get('filters') or []) or 'none (raw)'} | "
              f"params: {json.dumps({k: v for k, v in config.get('filter_params', {}).items() if k in (config.get('filters') or [])})}",
              f"Normalize: {config.get('normalize', 'minmax')} | noise_std: {config.get('noise_std')}",
+             *([] if config.get('use_val', True) else
+               ["⚠ Không có tập val riêng: best epoch / early stop chọn trên TEST -> kết quả lạc quan"]),
              '', '=== Kết quả (mean ± std qua các seed, std với ddof=0) ===']
     for s in summaries:
         lines.append(f"\n{s['model']}  (seeds: {s['seeds']})")
@@ -158,11 +162,12 @@ def write_run_summary(run_dir, summaries, config):
                      f"{s['latency_ms_mean']:.2f} ms | best epoch: {s['best_epoch_mean']:.1f} | "
                      f"epochs: {s['epochs_trained_mean']:.1f} | train time: {s['train_time_s_mean']:.0f} s/seed")
 
-    lines += ['', '=== Số liệu bài báo (public dataset; split/tiền xử lý có thể khác) ===']
-    for name, vals in PAPER_REFERENCE.items():
-        parts = [f"{k}={m}" + (f" ± {sd}" if sd is not None else '') for k, (m, sd) in vals.items()]
-        lines.append(f"  {name}: " + ', '.join(parts))
-    if summaries:
+    if config.get('paper_reference'):
+        lines += ['', '=== Số liệu bài báo (public dataset; split/tiền xử lý có thể khác) ===']
+        for name, vals in PAPER_REFERENCE.items():
+            parts = [f"{k}={m}" + (f" ± {sd}" if sd is not None else '') for k, (m, sd) in vals.items()]
+            lines.append(f"  {name}: " + ', '.join(parts))
+    if summaries and config.get('paper_reference'):
         s = summaries[-1]
         lines += ['', f"=== Chênh lệch {s['model']} so với bài báo (điểm %) ==="]
         for ref in ('AMCS+FC, Table 2', 'AMCS-TCN (GAP), Table 3'):
@@ -186,7 +191,8 @@ def main():
     # 配置见 config.py (默认 100 轮，严格对齐论文)
     config = build_config(args.dataset, data_path=args.data_path, epochs=args.epochs,
                           batch_size=args.batch_size, lr=args.lr, device=args.device,
-                          filters=args.filters, normalize=args.normalize)
+                          filters=args.filters, normalize=args.normalize,
+                          time_steps=args.time_steps)
     class_names = config['class_names']
 
     # 定义要求的不同随机种子 (默认 5 个)
@@ -214,8 +220,13 @@ def main():
 
     # 数据只加载一次 (数据集本身不依赖随机种子)
     train_set = CSIDataset(config['data_path'], 'train', **dataset_kwargs(config))
-    val_set = CSIDataset(config['data_path'], 'val', **dataset_kwargs(config))
     test_set = CSIDataset(config['data_path'], 'test', **dataset_kwargs(config))
+    # Không có tập val riêng (config 'use_val': False) -> dùng test để chọn best epoch / early stop
+    val_set = (CSIDataset(config['data_path'], 'val', **dataset_kwargs(config))
+               if config.get('use_val', True) else test_set)
+    clear_cache()  # dataset đã giữ bản cần dùng, bỏ bản thô/đã lọc để tiết kiệm RAM
+    print(f"📦 train/val/test: {len(train_set)}/{len(val_set)}/{len(test_set)} | "
+          f"sample shape: {tuple(train_set.x.shape[1:])} (antennas, T, subcarriers)")
 
     summaries = []
 

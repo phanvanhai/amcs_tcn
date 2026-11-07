@@ -58,7 +58,8 @@ def main():
     # main.py 原本默认 150 轮 (配合 StepLR(20) 平滑衰减)，可用 --epochs 覆盖
     config = build_config(args.dataset, data_path=args.data_path, epochs=args.epochs or 150,
                           batch_size=args.batch_size, lr=args.lr, device=args.device,
-                          filters=args.filters, normalize=args.normalize)
+                          filters=args.filters, normalize=args.normalize,
+                          time_steps=args.time_steps)
     class_names = config['class_names']
 
     print(f"🖥️ 当前使用的计算设备: {config['device'].upper()}")
@@ -68,8 +69,10 @@ def main():
     # ====================== 数据加载 ======================
     print("📦 正在加载数据集...")
     train_set = CSIDataset(config['data_path'], 'train', **dataset_kwargs(config))
-    val_set = CSIDataset(config['data_path'], 'val', **dataset_kwargs(config))
     test_set = CSIDataset(config['data_path'], 'test', **dataset_kwargs(config))
+    # Không có tập val riêng (config 'use_val': False) -> dùng test để chọn best epoch / early stop
+    val_set = (CSIDataset(config['data_path'], 'val', **dataset_kwargs(config))
+               if config.get('use_val', True) else test_set)
 
     max_label = int(max(s.y.max() for s in (train_set, val_set, test_set)))
     if max_label >= config['num_classes']:

@@ -8,6 +8,7 @@ _ROOT = Path(__file__).parent
 
 DATASETS = {
     'UT_HAR': {
+        'format': 'sensefi',   # data/X_{split}.csv + label/y_{split}.csv (xem datasets/csi_dataset.py)
         'data_path': str((_ROOT / '../../../CodeForPaper/benchmark/data/UT_HAR').resolve()),
         'antennas': 3,
         'subcarriers': 30,
@@ -22,6 +23,28 @@ DATASETS = {
         # Trọng số loss theo chỉ số nhãn. Giá trị dưới đây là của tác giả (giảm nhãn 2, 4 nhiều mẫu,
         # tăng nhãn 5, 6 ít mẫu). Có thể đặt 'auto' (nghịch tần suất) hoặc None (không trọng số).
         'class_weights': [1.0, 1.0, 0.8, 1.0, 0.8, 1.5, 2.0],
+        'paper_reference': True,   # in số liệu bài báo trong summary.txt (bài báo có chạy UT-HAR)
+    },
+    # SSHAR, thiết bị ESP32: 3 receiver x 1 anten, 56 subcarrier, 1000 điểm (5 s).
+    # room_XX/esp/rx_YY/subject_ZZ/amp_actAA_posBB_dirCC_repDD.npy, mỗi file (1, 56, 1000).
+    # 10 người x 8 hành động x 80 mẫu = 6400 mẫu (800/lớp). Split theo lần lặp như benchmark: 80/20.
+    'SSHAR_ESP': {
+        'format': 'sshar',
+        'data_path': str((_ROOT / '../../../CodeForPaper/benchmark/data/sshar_amp_interp').resolve()),
+        'fmt_kwargs': {'device': 'esp', 'rx_list': ['rx_00', 'rx_01', 'rx_02'],
+                       'labels': [1, 2, 3, 4, 5, 6, 7, 8]},   # act id trong tên file -> nhãn 0..7
+        'antennas': 3,          # = số rx x số anten mỗi rx -> 3 luồng MCS
+        'subcarriers': 56,
+        'raw_time_steps': 1000,
+        # Độ dài đưa vào model; nhỏ hơn 1000 thì lấy trung bình khối (vd. --time_steps 250).
+        'time_steps': 1000,
+        'batch_size': 32,       # T=1000: batch 64 cần ~22 GB activation (tràn GPU 16 GB), batch 32 ~11 GB
+        # Tạm thời chỉ chia train/test (80/20): tập test kiêm luôn vai trò val (chọn best epoch +
+        # early stop) -> kết quả lạc quan. Đặt True để tách val (rep cuối của train) -> ~70/10/20.
+        'use_val': False,
+        'class_names': ['act01', 'act02', 'act03', 'act04', 'act05', 'act06', 'act07', 'act08'],
+        'class_weights': None,  # dữ liệu cân bằng
+        'paper_reference': False,
     },
 }
 
@@ -54,8 +77,20 @@ PREPROCESS = {
 }
 
 
-def find_data_path(search_root='/kaggle/input', max_depth=5):
-    """Tìm thư mục chứa data/X_train.csv và label/y_train.csv (dùng trên Kaggle)."""
+def _is_data_root(path, fmt, fmt_kwargs):
+    import os
+    if fmt == 'sensefi':
+        return (os.path.isfile(os.path.join(path, 'data', 'X_train.csv'))
+                and os.path.isfile(os.path.join(path, 'label', 'y_train.csv')))
+    if fmt == 'sshar':
+        dev, rx = fmt_kwargs['device'], fmt_kwargs['rx_list'][0]
+        return any(d.startswith('room') and os.path.isdir(os.path.join(path, d, dev, rx))
+                   for d in os.listdir(path))
+    raise ValueError(f"Unknown dataset format {fmt!r}")
+
+
+def find_data_path(fmt='sensefi', fmt_kwargs=None, search_root='/kaggle/input', max_depth=5):
+    """Tìm thư mục gốc của dataset theo định dạng (dùng trên Kaggle)."""
     import os
 
     root = os.path.abspath(search_root)
@@ -63,8 +98,7 @@ def find_data_path(search_root='/kaggle/input', max_depth=5):
         return None
     base_depth = root.rstrip(os.sep).count(os.sep)
     for dirpath, dirnames, _ in os.walk(root, onerror=lambda e: None):
-        if (os.path.isfile(os.path.join(dirpath, 'data', 'X_train.csv'))
-                and os.path.isfile(os.path.join(dirpath, 'label', 'y_train.csv'))):
+        if _is_data_root(dirpath, fmt, fmt_kwargs or {}):
             return dirpath
         if dirpath.count(os.sep) - base_depth >= max_depth:
             dirnames[:] = []
@@ -86,12 +120,15 @@ def build_config(dataset='UT_HAR', **overrides):
 
     # Đường dẫn mặc định không tồn tại (vd. trên Kaggle) -> tự tìm trong /kaggle/input
     if overrides.get('data_path') is None and not Path(cfg['data_path']).exists():
-        found = find_data_path()
+        found = find_data_path(cfg['format'], cfg.get('fmt_kwargs'))
         if found is None:
             raise FileNotFoundError(f"Data not found at {cfg['data_path']} nor under /kaggle/input. "
-                                    f"Pass --data_path <folder containing data/ and label/>")
+                                    f"Pass --data_path <dataset root folder>")
         cfg['data_path'] = found
     cfg['num_classes'] = len(cfg['class_names'])
+    labels = cfg.get('fmt_kwargs', {}).get('labels')
+    if labels is not None and len(labels) != cfg['num_classes']:
+        raise ValueError(f"fmt_kwargs.labels has {len(labels)} entries but there are {cfg['num_classes']} classes")
     cfg.setdefault('device', 'cuda' if torch.cuda.is_available() else 'cpu')
 
     w = cfg.get('class_weights')
@@ -118,6 +155,9 @@ def dataset_kwargs(cfg):
         'filters': cfg.get('filters', []),
         'filter_params': cfg.get('filter_params', {}),
         'normalize': cfg.get('normalize', 'minmax'),
+        'fmt': cfg['format'],
+        'fmt_kwargs': ({**cfg.get('fmt_kwargs', {}), 'holdout_val': cfg.get('use_val', True)}
+                       if cfg['format'] == 'sshar' else cfg.get('fmt_kwargs', {})),
     }
 
 
@@ -127,6 +167,8 @@ def add_common_args(parser):
     parser.add_argument('--epochs', type=int, default=None)
     parser.add_argument('--batch_size', type=int, default=None)
     parser.add_argument('--lr', type=float, default=None)
+    parser.add_argument('--time_steps', type=int, default=None,
+                        help='độ dài thời gian đưa vào model (phải chia hết độ dài gốc; giảm bằng trung bình khối)')
     parser.add_argument('--device', default=None)
     parser.add_argument('--filters', nargs='+', default=None,
                         choices=['lowpass', 'hamming', 'kalman', 'none'],

@@ -55,14 +55,22 @@ def kalman(x, q_ratio=1.0):
 _FUNCS = {'lowpass': lowpass, 'hamming': hamming, 'kalman': kalman}
 
 
-def apply_filters(x, filters, params=None):
-    """Apply `filters` (any subset of FILTER_ORDER, always run in the paper's order) to x (N, T, F)."""
+def apply_filters(x, filters, params=None, chunk_mb=256):
+    """Apply `filters` (any subset of FILTER_ORDER, always run in the paper's order) to x (N, T, F).
+
+    Runs in float64 over chunks of samples (~chunk_mb each) to bound memory; every series is filtered
+    independently, so the result does not depend on the chunking.
+    """
     params = params or {}
     unknown = set(filters) - set(FILTER_ORDER)
     if unknown:
         raise ValueError(f"Unknown filters {sorted(unknown)}, available: {list(FILTER_ORDER)}")
-    x = x.astype(np.float64)
-    for name in FILTER_ORDER:
-        if name in filters:
-            x = _FUNCS[name](x, **params.get(name, {}))
-    return x.astype(np.float32)
+    out = np.empty(x.shape, dtype=np.float32)
+    step = max(1, int(chunk_mb * 2 ** 20 // (8 * x[0].size)))
+    for i in range(0, len(x), step):
+        c = x[i:i + step].astype(np.float64)
+        for name in FILTER_ORDER:
+            if name in filters:
+                c = _FUNCS[name](c, **params.get(name, {}))
+        out[i:i + step] = c
+    return out
