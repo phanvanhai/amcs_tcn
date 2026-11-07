@@ -43,11 +43,12 @@ patience 10 and StepLR(20, 0.5) as in the authors' code). Metrics: accuracy, mac
 recall / F1.
 
 ```
-python run_all.py --dataset SSHAR_ESP --filters none --mode dev     # 5 seeds -> metrics on VAL
+python run_all.py --dataset SSHAR_ESP --filters none --mode dev     # seed 42 (config dev_seeds) -> VAL
 python run_all.py --dataset SSHAR_ESP --filters none --mode final   # seed 42 -> metrics on TEST, once
 ```
 
 Use `--mode dev` for every comparison / tuning; run `--mode final` only once at the end.
+Dataset, device and split details shared by all models: [docs/SSHAR_ESP_protocol.md](docs/SSHAR_ESP_protocol.md).
 
 ## Signal preprocessing
 
@@ -76,7 +77,7 @@ python run_all.py                      # lowpass hamming kalman (default)
 
 ```python
 !python main.py                 # single run, seed 42, 100 epochs, test metrics
-# !python run_all.py            # dev: 5 seeds, val metrics (mean ± std); --mode final: seed 42, test
+# !python run_all.py            # dev: seed 42, val metrics; --mode final: seed 42, test
 # !python main.py --data_path /kaggle/input/<dataset>/UT_HAR --batch_size 32
 ```
 

@@ -57,8 +57,10 @@ TRAIN = {
     'noise_std': 0.02,         # độ lớn nhiễu Gaussian (jittering) khi train, 0 để tắt
     'save_dir': 'model',
     'log_dir': 'logs',
-    # Development: 5 lần (5 seed) -> đánh giá trên VAL. Final test: 1 lần (seed 42) -> đánh giá trên TEST.
-    'dev_seeds': [42, 3407, 1024, 2024, 0],
+    # Development -> đánh giá trên VAL; Final test: 1 lần (seed 42) -> đánh giá trên TEST.
+    # Hiện chỉ chạy 1 seed (42) để đánh giá nhanh; thêm seed khi cần, vd. [42, 3407, 1024, 2024, 0]
+    # (hoặc --seeds 42 3407 ... khi chạy).
+    'dev_seeds': [42],
     'final_seed': 42,
 }
 

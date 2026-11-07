@@ -1,7 +1,7 @@
 """Chạy mô hình với nhiều seed, lưu chi tiết từng seed và bảng tổng hợp mean ± std.
 
 Hai chế độ (model luôn được chọn theo best val accuracy, có early stop trên val):
-    --mode dev    (mặc định) 5 seed config['dev_seeds'] -> metric đo trên VAL (mean ± std). Tập test
+    --mode dev    (mặc định) seed config['dev_seeds'] (hiện [42]) -> metric đo trên VAL. Tập test
                   không được nạp, dùng cho mọi điều chỉnh/so sánh.
     --mode final  1 lần, seed config['final_seed'] (42) -> metric đo trên TEST. Chạy một lần cuối cùng.
 
@@ -189,7 +189,7 @@ def main():
     import argparse
     parser = add_common_args(argparse.ArgumentParser())
     parser.add_argument('--mode', default='dev', choices=['dev', 'final'],
-                        help="dev: 5 seed, đánh giá trên val | final: seed 42, đánh giá trên test")
+                        help="dev: seed config['dev_seeds'], đánh giá trên val | final: seed 42, đánh giá trên test")
     parser.add_argument('--seeds', type=int, nargs='+', default=None,
                         help="ghi đè seed (mặc định: dev -> config['dev_seeds'], final -> config['final_seed'])")
     parser.add_argument('--results_dir', default='results', help='thư mục gốc chứa kết quả')
@@ -203,7 +203,7 @@ def main():
                           time_steps=args.time_steps)
     class_names = config['class_names']
 
-    # dev: 5 seed -> val | final: seed 42 -> test
+    # dev: config['dev_seeds'] -> val | final: seed 42 -> test
     seed_list = args.seeds or (config['dev_seeds'] if args.mode == 'dev' else [config['final_seed']])
     config['mode'] = args.mode
     config['eval_split'] = 'val' if args.mode == 'dev' else 'test'
