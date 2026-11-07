@@ -45,15 +45,15 @@ DATASETS = {
 }
 
 # Thiết lập thí nghiệm chung (benchmark): batch 32, 100 epoch, Adam, chọn model theo best val accuracy,
-# LR theo bài gốc (AMCS-TCN, Table 1: Adam, lr 0.001; bài dùng batch 64). Early stop (patience 10)
-# và StepLR giữ như code gốc của tác giả.
+# LR theo bài gốc (AMCS-TCN, Table 1: Adam, lr 0.001; bài dùng batch 64), dừng sớm patience 10 theo
+# val acc. StepLR giữ như code gốc của tác giả.
 TRAIN = {
     'batch_size': 32,
     'lr': 1e-3,
     'epochs': 100,
     'lr_step': 20,             # StepLR step_size
     'lr_gamma': 0.5,           # StepLR gamma
-    'early_stop_patience': 10,
+    'early_stop_patience': 10,   # dừng sớm: 10 epoch liên tiếp val acc không cải thiện (protocol chung)
     'noise_std': 0.02,         # độ lớn nhiễu Gaussian (jittering) khi train, 0 để tắt
     'save_dir': 'model',
     'log_dir': 'logs',
@@ -170,6 +170,8 @@ def add_common_args(parser):
     parser.add_argument('--epochs', type=int, default=None)
     parser.add_argument('--batch_size', type=int, default=None)
     parser.add_argument('--lr', type=float, default=None)
+    parser.add_argument('--patience', type=int, default=None,
+                        help='dừng sớm sau N epoch liên tiếp val acc không cải thiện (mặc định 10)')
     parser.add_argument('--time_steps', type=int, default=None,
                         help='độ dài thời gian đưa vào model (phải chia hết độ dài gốc; giảm bằng trung bình khối)')
     parser.add_argument('--device', default=None)

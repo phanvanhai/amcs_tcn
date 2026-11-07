@@ -38,8 +38,9 @@ dir!=0 rep 5 (same test set as the benchmark), val = dir0 rep 8 / dir!=0 rep 4 o
 
 ## Experiment protocol
 
-Batch 32, 100 epochs, Adam, lr 0.001 (paper Table 1), model = best val accuracy (early stop
-patience 10 and StepLR(20, 0.5) as in the authors' code). Metrics: accuracy, macro precision /
+Batch 32, up to 100 epochs, Adam, lr 0.001 (paper Table 1), model = best val accuracy, early
+stopping after 10 epochs without val accuracy improvement (`--patience N` to change); StepLR(20, 0.5)
+as in the authors' code. Metrics: accuracy, macro precision /
 recall / F1.
 
 ```

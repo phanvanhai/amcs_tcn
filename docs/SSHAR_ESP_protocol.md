@@ -125,8 +125,18 @@ nguyên**, tập val được tách ra từ tập train cũ.
 | Optimizer | Adam |
 | Learning rate | theo bài báo gốc của từng mô hình (AMCS-TCN: 0.001, Table 1 của bài) |
 | Chọn model | checkpoint có **val accuracy** cao nhất |
+| Dừng sớm (early stopping) | patience **10 epoch** theo val accuracy (xem bên dưới) |
 | Metric | accuracy, precision, recall, F1 (precision/recall/F1 lấy trung bình **macro** trên 8 lớp) |
 | Seed | hiện chỉ dùng 42 để đánh giá nhanh, sau này có thể thêm seed |
+
+**Dừng sớm**, cách tính cụ thể để mọi mô hình làm giống nhau:
+
+- Sau mỗi epoch, đo accuracy trên val. Nếu val accuracy **lớn hơn hoặc bằng** mức tốt nhất trước đó,
+  lưu checkpoint mới và đặt bộ đếm về 0. Ngược lại, bộ đếm tăng thêm 1.
+- Khi bộ đếm đạt **10** (10 epoch liên tiếp không cải thiện), dừng train.
+- Checkpoint dùng để đánh giá là checkpoint đã lưu cuối cùng, tức là có val accuracy cao nhất. Nếu
+  nhiều epoch hoà nhau thì lấy epoch muộn nhất.
+- Số epoch tối đa vẫn là 100. Báo cáo kèm best epoch và tổng số epoch đã chạy.
 
 Hai giai đoạn:
 
@@ -138,8 +148,8 @@ Hai giai đoạn:
    một lần chạy. Sau khi xem kết quả test thì không điều chỉnh gì thêm.
 
 Những mục thuộc về từng mô hình (ghi rõ trong báo cáo của mô hình đó, không phải thiết lập chung):
-early stopping, LR scheduler, augmentation, class weights, chuẩn hoá input và cách reshape input.
-Để tham khảo, AMCS-TCN dùng early stop patience 10 theo val accuracy, StepLR(20, 0.5), nhiễu Gaussian
+LR scheduler, augmentation, class weights, chuẩn hoá input và cách reshape input.
+Để tham khảo, AMCS-TCN dùng StepLR(20, 0.5), nhiễu Gaussian
 std 0.02, min-max theo min/max toàn cục của tập train, và giữ đủ T = 1000 với input `(3, 1000, 56)`.
 
 ## 5. Checklist khi thêm một mô hình mới
@@ -150,5 +160,6 @@ std 0.02, min-max theo min/max toàn cục của tập train, và giữ đủ T 
 - [ ] Thống kê chuẩn hoá (nếu có) chỉ tính trên **train**
 - [ ] Batch 32, tối đa 100 epoch, Adam, LR theo bài gốc
 - [ ] Chọn checkpoint theo val accuracy cao nhất
+- [ ] Dừng sớm sau 10 epoch liên tiếp val accuracy không cải thiện (bằng mức tốt nhất vẫn tính là cải thiện)
 - [ ] Kết quả development báo cáo trên val (seed 42); test chỉ đánh giá một lần (seed 42)
 - [ ] Báo cáo accuracy và precision / recall / F1 (macro)

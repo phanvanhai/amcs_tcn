@@ -208,7 +208,7 @@ def main():
     config = build_config(args.dataset, data_path=args.data_path, epochs=args.epochs,
                           batch_size=args.batch_size, lr=args.lr, device=args.device,
                           filters=args.filters, normalize=args.normalize,
-                          time_steps=args.time_steps)
+                          time_steps=args.time_steps, early_stop_patience=args.patience)
     class_names = config['class_names']
 
     # dev: config['dev_seeds'] -> val | final: seed 42 -> test
