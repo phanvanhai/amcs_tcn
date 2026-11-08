@@ -31,9 +31,9 @@ sshar_amp_interp/room_XX/esp/rx_{00,01,02}/subject_ZZ/amp_actAA_posBB_dirCC_repD
 ```
 
 The 3 ESP32 receivers (1 antenna each) become the 3 AMCS streams: input `(3, T, 56)`, 8 classes
-(act 1..8). Split by repetition, exactly 7:1:2 per (subject, class): test = dir0 rep 9-10 /
-dir!=0 rep 5 (same test set as the benchmark), val = dir0 rep 8 / dir!=0 rep 4 of one direction
-(alternating by position), train = the rest -> 4480 / 640 / 1280. Full length `time_steps=1000`
+(act 1..8). Default split is **cross-user** 7:1:2 (`--split user`): user case 0 of the benchmark,
+train subjects 1,2,3,4,9,10,11 / val 12 / test 13,14 -> 4480 / 640 / 1280 (`--user_case 0..4` for the
+other cases). `--split repeat` splits by repetition instead (every subject in every set). Full length `time_steps=1000`
 (`--time_steps 250` averages blocks of 4 samples instead).
 
 ## Experiment protocol

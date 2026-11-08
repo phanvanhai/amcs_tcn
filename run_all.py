@@ -42,7 +42,7 @@ for _s in (sys.stdout, sys.stderr):
         _s.reconfigure(encoding='utf-8', line_buffering=True)  # in log ngay, kể cả khi chạy qua pipe (!python)
 
 # 导入数据集和训练器
-from datasets.csi_dataset import CSIDataset, clear_cache
+from datasets.csi_dataset import CSIDataset, clear_cache, sshar_split_subjects
 from trainer import Trainer
 
 # 仅使用 AMCS_TCN_FC。如需对比其他模型，取消下方 import 的注释并在 model_classes 中启用
@@ -161,6 +161,7 @@ def write_run_summary(run_dir, summaries, config):
              f"Normalize: {config.get('normalize', 'minmax')} | noise_std: {config.get('noise_std')}",
              f"Mode: {config['mode']} -> metrics on {config['eval_split'].upper()} "
              f"(model = best val accuracy) | split sizes: {config['split_sizes']}",
+             *([f"Split: {config['split_desc']}"] if config.get('split_desc') else []),
              '', f"=== Kết quả trên {config['eval_split'].upper()} (mean ± std qua các seed, std với ddof=0) ==="]
     for s in summaries:
         lines.append(f"\n{s['model']}  (seeds: {s['seeds']})")
@@ -208,7 +209,8 @@ def main():
     config = build_config(args.dataset, data_path=args.data_path, epochs=args.epochs,
                           batch_size=args.batch_size, lr=args.lr, device=args.device,
                           filters=args.filters, normalize=args.normalize,
-                          time_steps=args.time_steps, early_stop_patience=args.patience)
+                          time_steps=args.time_steps, early_stop_patience=args.patience,
+                          split_by=args.split_by, user_case=args.user_case)
     class_names = config['class_names']
 
     # dev: config['dev_seeds'] -> val | final: seed 42 -> test
@@ -241,6 +243,13 @@ def main():
     eval_set = val_set if args.mode == 'dev' else CSIDataset(config['data_path'], 'test', **dataset_kwargs(config))
     clear_cache()  # dataset đã giữ bản cần dùng, bỏ bản thô/đã lọc để tiết kiệm RAM
     print(f"✅ Nạp dữ liệu xong sau {time.time() - t_load:.0f}s", flush=True)
+    if config['format'] == 'sshar':
+        fk = config['fmt_kwargs']
+        subj = sshar_split_subjects(config['data_path'], **fk)
+        config['split_desc'] = (f"{fk['split_by']}" + (f" case {fk['user_case']}" if fk['split_by'] == 'user' else '')
+                                + ' | ' + ' | '.join(f"{k}: {', '.join(s.replace('subject_', '') for s in v)}"
+                                                     for k, v in subj.items()))
+        print(f"👥 Split {config['split_desc']}", flush=True)
     config['split_sizes'] = {'train': len(train_set), 'val': len(val_set),
                              **({'test': len(eval_set)} if args.mode == 'final' else {})}
     print(f"📦 mode={args.mode} | sizes: {config['split_sizes']} | eval on {config['eval_split'].upper()} | "

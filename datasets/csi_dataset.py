@@ -10,10 +10,13 @@ Two on-disk formats (config: DATASETS[...]['format']):
 'sshar' (SSHAR ESP / ASUS, one .npy per receiver per recording):
     <data_path>/room_XX/<device>/rx_YY/subject_ZZ/amp_actAA_posBB_dirCC_repDD.npy -> (ant, sub, T)
     The receivers in `rx_list` are stacked into rx * ant streams (ESP32: 3 rx x 1 ant = 3 streams,
-    56 subcarriers). Labels: act in `labels` -> index in that list. Split by repetition, exactly
-    7:1:2 per (subject, class): test = dir0 rep 9-10 / dir!=0 rep 5 (same test set as the benchmark);
-    val = dir0 rep 8 / dir!=0 rep 4 of one direction (dir01 for odd positions, dir02 for even ones,
-    so both directions are represented); train = the rest. ESP: 4480 / 640 / 1280.
+    56 subcarriers). Labels: act in `labels` -> index in that list. Two splits (split_by), both 7:1:2:
+      'user'   (cross-user, default): user case k of the benchmark (SSHAR_USER_CASES[k] = 8 train
+               subjects); the last of those 8 is held out as the val subject, the remaining subjects
+               are test. Case 0: train 1,2,3,4,9,10,11 / val 12 / test 13,14 -> 4480 / 640 / 1280.
+      'repeat' (same subjects in every set): exactly 7:1:2 per (subject, class): test = dir0 rep 9-10 /
+               dir!=0 rep 5 (same test set as the benchmark); val = dir0 rep 8 / dir!=0 rep 4 of one
+               direction (dir01 for odd positions, dir02 for even ones); train = the rest.
 
 Pipeline (both formats): optional denoising (datasets/preprocess.py, per series, along time, at the
 raw rate) -> optional time downsampling (mean over blocks of raw_T // time_steps samples) ->
@@ -39,7 +42,17 @@ from datasets.preprocess import apply_filters
 _cache = {}
 
 SSHAR_PATTERN = re.compile(r'act(\d+)_pos(\d+)_dir(\d+)_rep(\d+)')
-SSHAR_SPLIT_VERSION = 'rep-7:1:2-v1'  # đổi khi sửa sshar_split_of để cache trên đĩa không bị dùng nhầm
+SSHAR_SPLIT_VERSION = 'v2'  # đổi khi sửa cách chia để cache trên đĩa không bị dùng nhầm
+
+# Các case chia theo người của benchmark (CodeForPaper/benchmark/datasets.py, USER_CASES['sshar']):
+# danh sách 8 người dùng để train; người còn lại là test. Ở đây người cuối danh sách được tách làm val.
+SSHAR_USER_CASES = [
+    [1, 2, 3, 4, 9, 10, 11, 12],
+    [1, 3, 4, 9, 11, 12, 13, 14],
+    [1, 2, 4, 9, 10, 12, 13, 14],
+    [2, 3, 4, 10, 11, 12, 13, 14],
+    [1, 2, 4, 9, 10, 11, 13, 14],
+]
 
 # Cache mảng thô của từng split ra đĩa (.npy) để lần chạy sau trong cùng phiên nạp nhanh.
 # Mặc định bật trên Kaggle (/tmp/csi_cache); đặt CSI_CACHE_DIR="" để tắt, hoặc trỏ thư mục khác.
@@ -69,6 +82,14 @@ def _load_sensefi(data_path, split, antennas, subcarriers):
     return np.ascontiguousarray(x), y
 
 
+def sshar_user_split_of(subject_id, user_case=0):
+    """Cross-user 7:1:2 split: 7 train subjects, 1 val subject, the rest test (see module docstring)."""
+    train_ids = SSHAR_USER_CASES[user_case]
+    if subject_id not in train_ids:
+        return 'test'
+    return 'val' if subject_id == train_ids[-1] else 'train'
+
+
 def sshar_split_of(pos, direction, rep):
     """7:1:2 repetition split (see module docstring)."""
     if direction == 0:  # 10 repetitions: 1-7 train, 8 val, 9-10 test
@@ -83,13 +104,17 @@ def sshar_split_of(pos, direction, rep):
 _index_cache = {}
 
 
-def _sshar_index(data_path, device, rx_list, labels):
+def _sshar_index(data_path, device, rx_list, labels, split_by='user', user_case=0):
     """[(split, label_idx, [file per rx])] for every recording present in all receivers.
 
     Built once per argument set; existence is checked with one directory listing per
     (receiver, subject) instead of one stat per file (much faster on network file systems).
     """
-    key = _key(os.path.abspath(data_path), device, rx_list, labels)
+    if split_by not in ('user', 'repeat'):
+        raise ValueError(f"split_by must be 'user' or 'repeat', got {split_by!r}")
+    if split_by == 'user' and not 0 <= user_case < len(SSHAR_USER_CASES):
+        raise ValueError(f"user_case must be 0..{len(SSHAR_USER_CASES) - 1}, got {user_case}")
+    key = _key(os.path.abspath(data_path), device, rx_list, labels, split_by, user_case)
     if key in _index_cache:
         return _index_cache[key]
     root, label_map, index = Path(data_path), {a: i for i, a in enumerate(labels)}, []
@@ -109,7 +134,9 @@ def _sshar_index(data_path, device, rx_list, labels):
                 if missing:
                     raise FileNotFoundError(f"{name} missing in {missing} ({room.name}/{subject})")
                 files = [room / device / rx / subject / name for rx in rx_list]
-                index.append((sshar_split_of(pos, direction, rep), label_map[act], files))
+                split = (sshar_user_split_of(int(subject.split('_')[1]), user_case) if split_by == 'user'
+                         else sshar_split_of(pos, direction, rep))
+                index.append((split, label_map[act], files))
     if not index:
         raise FileNotFoundError(f"No SSHAR files for device={device!r}, rx={rx_list}, labels={labels} "
                                 f"under {data_path}")
@@ -117,11 +144,20 @@ def _sshar_index(data_path, device, rx_list, labels):
     return index
 
 
-def _load_sshar(data_path, split, antennas, subcarriers, device, rx_list, labels):
+def sshar_split_subjects(data_path, device, rx_list, labels, split_by='user', user_case=0):
+    """{split: sorted subject folder names} for logging / reports."""
+    out = {}
+    for split, _, files in _sshar_index(data_path, device, rx_list, labels, split_by, user_case):
+        out.setdefault(split, set()).add(files[0].parent.name)
+    return {k: sorted(v) for k, v in sorted(out.items())}
+
+
+def _load_sshar(data_path, split, antennas, subcarriers, device, rx_list, labels, split_by='user',
+                user_case=0):
     cache = None
     if CACHE_DIR:
-        h = hashlib.md5(_key(os.path.abspath(data_path), split, device, rx_list, labels,
-                             SSHAR_SPLIT_VERSION).encode()).hexdigest()[:12]
+        h = hashlib.md5(_key(os.path.abspath(data_path), split, device, rx_list, labels, split_by,
+                             user_case, SSHAR_SPLIT_VERSION).encode()).hexdigest()[:12]
         cache = os.path.join(CACHE_DIR, f'sshar_{device}_{split}_{h}')
         if os.path.isfile(cache + '_y.npy'):
             x, y = np.load(cache + '_x.npy'), np.load(cache + '_y.npy')
@@ -129,7 +165,8 @@ def _load_sshar(data_path, split, antennas, subcarriers, device, rx_list, labels
             return x, y
 
     t0 = time.time()
-    items = [(lab, files) for s, lab, files in _sshar_index(data_path, device, rx_list, labels) if s == split]
+    items = [(lab, files) for s, lab, files in _sshar_index(data_path, device, rx_list, labels, split_by, user_case)
+             if s == split]
     if not items:
         raise ValueError(f"SSHAR split {split!r} is empty")
     first = np.load(items[0][1][0])  # (ant, sub, T)

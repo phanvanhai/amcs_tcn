@@ -27,12 +27,16 @@ DATASETS = {
     },
     # SSHAR, thiết bị ESP32: 3 receiver x 1 anten, 56 subcarrier, 1000 điểm (5 s).
     # room_XX/esp/rx_YY/subject_ZZ/amp_actAA_posBB_dirCC_repDD.npy, mỗi file (1, 56, 1000).
-    # 10 người x 8 hành động x 80 mẫu = 6400 mẫu (800/lớp). Split theo lần lặp 7:1:2 -> 4480/640/1280.
+    # 10 người x 8 hành động x 80 mẫu = 6400 mẫu (800/lớp). Chia 7:1:2 -> 4480/640/1280:
+    #   split_by='user'   (mặc định, cross-user): case k của benchmark, 7 người train / 1 người val / 2 người test
+    #                     case 0: train 1,2,3,4,9,10,11 | val 12 | test 13,14 (đổi bằng --user_case 0..4)
+    #   split_by='repeat' : chia theo lần lặp, người nào cũng có ở cả 3 tập (xem docs/SSHAR_ESP_protocol.md)
     'SSHAR_ESP': {
         'format': 'sshar',
         'data_path': str((_ROOT / '../../../CodeForPaper/benchmark/data/sshar_amp_interp').resolve()),
         'fmt_kwargs': {'device': 'esp', 'rx_list': ['rx_00', 'rx_01', 'rx_02'],
-                       'labels': [1, 2, 3, 4, 5, 6, 7, 8]},   # act id trong tên file -> nhãn 0..7
+                       'labels': [1, 2, 3, 4, 5, 6, 7, 8],    # act id trong tên file -> nhãn 0..7
+                       'split_by': 'user', 'user_case': 0},
         'antennas': 3,          # = số rx x số anten mỗi rx -> 3 luồng MCS
         'subcarriers': 56,
         'raw_time_steps': 1000,
@@ -118,7 +122,13 @@ def build_config(dataset='UT_HAR', **overrides):
     if dataset not in DATASETS:
         raise ValueError(f"Unknown dataset {dataset!r}, available: {list(DATASETS)}")
     cfg = {**TRAIN, **PREPROCESS, **DATASETS[dataset], 'dataset': dataset}
+    split_over = {k: overrides.pop(k) for k in ('split_by', 'user_case') if overrides.get(k) is not None}
+    overrides = {k: v for k, v in overrides.items() if k not in ('split_by', 'user_case')}
     cfg.update({k: v for k, v in overrides.items() if v is not None})
+    if split_over:
+        if cfg['format'] != 'sshar':
+            raise ValueError(f"--split / --user_case only apply to SSHAR datasets (dataset {dataset!r} has a fixed split)")
+        cfg['fmt_kwargs'] = {**cfg['fmt_kwargs'], **split_over}
     if 'none' in (cfg.get('filters') or []):
         cfg['filters'] = []
 
@@ -170,6 +180,10 @@ def add_common_args(parser):
     parser.add_argument('--epochs', type=int, default=None)
     parser.add_argument('--batch_size', type=int, default=None)
     parser.add_argument('--lr', type=float, default=None)
+    parser.add_argument('--split', dest='split_by', default=None, choices=['user', 'repeat'],
+                        help="SSHAR: 'user' = cross-user (mặc định), 'repeat' = theo lần lặp")
+    parser.add_argument('--user_case', type=int, default=None,
+                        help='SSHAR cross-user: case 0..4 của benchmark (mặc định 0: test 13,14, val 12)')
     parser.add_argument('--patience', type=int, default=None,
                         help='dừng sớm sau N epoch liên tiếp val acc không cải thiện (mặc định 10)')
     parser.add_argument('--time_steps', type=int, default=None,

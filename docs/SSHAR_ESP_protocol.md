@@ -3,7 +3,10 @@
 Note này cố định **thông số thiết bị, cấu trúc dữ liệu, cách chia train/val/test và thiết lập train**
 cho dataset SSHAR ESP. Mọi mô hình trong benchmark (AMCS-TCN và các mô hình khác) đều phải theo đúng
 note này để kết quả so sánh được với nhau. Code tham chiếu: `datasets/csi_dataset.py`
-(`sshar_split_of`, `_sshar_index`), nhánh `sshar_esp`.
+(`SSHAR_USER_CASES`, `sshar_user_split_of`, `sshar_split_of`, `_sshar_index`), nhánh `sshar_esp`.
+
+**Cách chia chính: cross-user** (người trong test không xuất hiện khi train), case 0:
+train 7 người `01, 02, 03, 04, 09, 10, 11` / val `12` / test `13, 14`. Chi tiết ở mục 3.
 
 ## 1. Thiết bị và tín hiệu
 
@@ -55,15 +58,70 @@ Các hành động chia làm hai nhóm. Đây là lý do cách chia tập khác 
 Tổng: 10 người × 8 hành động × 80 = **6400 bản ghi** (800 mỗi lớp, cân bằng).
 Tên hành động chưa chốt, báo cáo tạm dùng `act01` … `act08`.
 
-## 3. Chia train / val / test (7:1:2, theo lần lặp)
+## 3. Chia train / val / test (7:1:2)
 
-Chia **theo lần lặp**: người nào, vị trí nào cũng có mặt ở cả ba tập, và một bản ghi (cả 3 receiver)
-luôn nằm trọn trong một tập. Không xáo trộn ngẫu nhiên từng mẫu rồi mới chia, vì như vậy các mẫu gần
-như trùng nhau sẽ rơi vào cả train lẫn test.
+Có hai cách chia, đều theo tỉ lệ 7:1:2 và đều ra **4480 / 640 / 1280** mẫu. **Cách chính là
+cross-user (3A).** Chia theo lần lặp (3B) chỉ dùng khi muốn so sánh thêm. Trong mọi trường hợp, một bản
+ghi (cả 3 receiver) luôn nằm trọn trong một tập, và không xáo trộn ngẫu nhiên từng mẫu rồi mới chia.
+
+### 3A. Cross-user (mặc định, `--split user`)
+
+Chia **theo người**: mỗi người chỉ thuộc đúng một tập, nên tập test gồm những người model chưa từng
+thấy khi train. Cách này đo khả năng tổng quát hoá sang người mới, khó hơn và sát thực tế hơn chia
+theo lần lặp. Mỗi người có 640 bản ghi (8 hành động × 80), nên 7 / 1 / 2 người tương ứng
+4480 / 640 / 1280 mẫu.
+
+Dùng lại 5 case chia theo người của benchmark (`USER_CASES['sshar']` trong
+`CodeForPaper/benchmark/datasets.py`). Mỗi case cho 8 người được train, người còn lại là test. Ở đây
+**người cuối cùng trong danh sách 8 người được tách ra làm val**, để val cũng là người không có trong
+train, giống với điều kiện của test.
+
+| Case | Train (7 người) | Val (1 người) | Test (2 người) |
+|---|---|---|---|
+| **0 (mặc định)** | **01, 02, 03, 04, 09, 10, 11** | **12** | **13, 14** |
+| 1 | 01, 03, 04, 09, 11, 12, 13 | 14 | 02, 10 |
+| 2 | 01, 02, 04, 09, 10, 12, 13 | 14 | 03, 11 |
+| 3 | 02, 03, 04, 10, 11, 12, 13 | 14 | 01, 09 |
+| 4 | 01, 02, 04, 09, 10, 11, 13 | 14 | 03, 12 |
+
+Hiện chỉ chạy **case 0**. Đổi case bằng `--user_case k`. Lưu ý: 5 case này không phủ đều mọi người
+(người 03 nằm trong test ở 2 case, người 04 không bao giờ nằm trong test). Nếu sau này chạy nhiều case
+để lấy trung bình thì cần nhắc điều này khi báo cáo.
+
+Quy tắc dạng code (bản tham chiếu, chép nguyên văn):
+
+```python
+SSHAR_USER_CASES = [
+    [1, 2, 3, 4, 9, 10, 11, 12],
+    [1, 3, 4, 9, 11, 12, 13, 14],
+    [1, 2, 4, 9, 10, 12, 13, 14],
+    [2, 3, 4, 10, 11, 12, 13, 14],
+    [1, 2, 4, 9, 10, 11, 13, 14],
+]
+
+def sshar_user_split_of(subject_id, user_case=0):   # subject_id: số trong tên thư mục subject_XX
+    train_ids = SSHAR_USER_CASES[user_case]
+    if subject_id not in train_ids:
+        return 'test'
+    return 'val' if subject_id == train_ids[-1] else 'train'
+```
+
+Số mẫu phải ra (case nào cũng vậy):
+
+| Tập | Số người | Tổng | Mỗi lớp |
+|---|---|---|---|
+| train | 7 | 4480 | 560 |
+| val | 1 | 640 | 80 |
+| test | 2 | 1280 | 160 |
+
+### 3B. Chia theo lần lặp (tuỳ chọn, `--split repeat`)
+
+Chia **theo lần lặp**: người nào, vị trí nào cũng có mặt ở cả ba tập. Kết quả thường cao hơn
+cross-user vì model đã gặp chính những người trong test.
 
 Với **mỗi cặp (người, hành động)**, 80 bản ghi được chia đúng **56 / 8 / 16**.
 
-### Nhóm 1: `dir00` (act01, 02, 03, 08), 10 lần lặp mỗi vị trí
+#### Nhóm 1: `dir00` (act01, 02, 03, 08), 10 lần lặp mỗi vị trí
 
 | Tập | Quy tắc | Mỗi (người, hành động) |
 |---|---|---|
@@ -71,7 +129,7 @@ Với **mỗi cặp (người, hành động)**, 80 bản ghi được chia đú
 | val | rep 8 | 8 vị trí × 1 = 8 |
 | test | rep 9 và 10 | 8 vị trí × 2 = 16 |
 
-### Nhóm 2: `dir01` / `dir02` (act04, 05, 06, 07), 5 lần lặp mỗi hướng mỗi vị trí
+#### Nhóm 2: `dir01` / `dir02` (act04, 05, 06, 07), 5 lần lặp mỗi hướng mỗi vị trí
 
 | Tập | Quy tắc | Mỗi (người, hành động) |
 |---|---|---|
@@ -93,7 +151,7 @@ Ví dụ act04, subject_01, pos03 (lẻ):
 
 Với pos04 (chẵn), ở rep 4: dir01 thuộc train, dir02 thuộc **val**.
 
-### Quy tắc dạng code (bản tham chiếu, chép nguyên văn)
+#### Quy tắc dạng code (bản tham chiếu)
 
 ```python
 def sshar_split_of(pos, direction, rep):
@@ -105,7 +163,7 @@ def sshar_split_of(pos, direction, rep):
     return 'val' if rep == 4 and direction == val_dir else 'train'
 ```
 
-### Số mẫu phải ra (kiểm tra sau khi load)
+#### Số mẫu phải ra
 
 | Tập | Tổng | Mỗi lớp | Theo hướng |
 |---|---|---|---|
@@ -156,7 +214,9 @@ std 0.02, min-max theo min/max toàn cục của tập train, và giữ đủ T 
 
 - [ ] Đọc đủ 3 receiver, và bản ghi nào cũng có đủ ở cả ba
 - [ ] Nhãn `act01..08` ánh xạ sang `0..7`
-- [ ] Dùng đúng `sshar_split_of` ở trên, số mẫu khớp **4480 / 640 / 1280** (mỗi lớp 560 / 80 / 160)
+- [ ] Chia cross-user case 0 (train 01, 02, 03, 04, 09, 10, 11 / val 12 / test 13, 14) theo
+      `sshar_user_split_of` ở mục 3A; số mẫu khớp **4480 / 640 / 1280** (mỗi lớp 560 / 80 / 160)
+- [ ] Ghi rõ cách chia trong báo cáo (cross-user và case số mấy, hoặc theo lần lặp)
 - [ ] Thống kê chuẩn hoá (nếu có) chỉ tính trên **train**
 - [ ] Batch 32, tối đa 100 epoch, Adam, LR theo bài gốc
 - [ ] Chọn checkpoint theo val accuracy cao nhất
