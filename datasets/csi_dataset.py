@@ -12,8 +12,9 @@ Two on-disk formats (config: DATASETS[...]['format']):
     The receivers in `rx_list` are stacked into rx * ant streams (ESP32: 3 rx x 1 ant = 3 streams,
     56 subcarriers). Labels: act in `labels` -> index in that list. Two splits (split_by), both 7:1:2:
       'user'   (cross-user, default): user case k of the benchmark (SSHAR_USER_CASES[k] = 8 train
-               subjects); the last of those 8 is held out as the val subject, the remaining subjects
-               are test. Case 0: train 1,2,3,4,9,10,11 / val 12 / test 13,14 -> 4480 / 640 / 1280.
+               subjects); SSHAR_VAL_SUBJECTS[k] of those 8 is held out as the val subject, the
+               remaining subjects are test. Case 0: train 1,2,3,4,9,10,11 / val 12 / test 13,14
+               -> 4480 / 640 / 1280. Table: docs/kaggle_run_convention.md section 4.
       'repeat' (same subjects in every set): exactly 7:1:2 per (subject, class): test = dir0 rep 9-10 /
                dir!=0 rep 5 (same test set as the benchmark); val = dir0 rep 8 / dir!=0 rep 4 of one
                direction (dir01 for odd positions, dir02 for even ones); train = the rest.
@@ -42,10 +43,12 @@ from datasets.preprocess import apply_filters
 _cache = {}
 
 SSHAR_PATTERN = re.compile(r'act(\d+)_pos(\d+)_dir(\d+)_rep(\d+)')
-SSHAR_SPLIT_VERSION = 'v2'  # đổi khi sửa cách chia để cache trên đĩa không bị dùng nhầm
+SSHAR_SPLIT_VERSION = 'v3'  # đổi khi sửa cách chia để cache trên đĩa không bị dùng nhầm
 
 # Các case chia theo người của benchmark (CodeForPaper/benchmark/datasets.py, USER_CASES['sshar']):
-# danh sách 8 người dùng để train; người còn lại là test. Ở đây người cuối danh sách được tách làm val.
+# danh sách 8 người dùng để train; người còn lại là test. Người val tách từ 8 người đó theo
+# SSHAR_VAL_SUBJECTS (docs/kaggle_run_convention.md mục 4): case 0 giữ người cuối (12); case 1-4 chọn
+# ngẫu nhiên random.Random(42), không trùng nhau giữa các case.
 SSHAR_USER_CASES = [
     [1, 2, 3, 4, 9, 10, 11, 12],
     [1, 3, 4, 9, 11, 12, 13, 14],
@@ -53,6 +56,8 @@ SSHAR_USER_CASES = [
     [2, 3, 4, 10, 11, 12, 13, 14],
     [1, 2, 4, 9, 10, 11, 13, 14],
 ]
+SSHAR_VAL_SUBJECTS = [12, 13, 1, 2, 10]
+assert all(v in c for v, c in zip(SSHAR_VAL_SUBJECTS, SSHAR_USER_CASES))
 
 # Cache mảng thô của từng split ra đĩa (.npy) để lần chạy sau trong cùng phiên nạp nhanh.
 # Mặc định bật trên Kaggle (/tmp/csi_cache); đặt CSI_CACHE_DIR="" để tắt, hoặc trỏ thư mục khác.
@@ -84,10 +89,9 @@ def _load_sensefi(data_path, split, antennas, subcarriers):
 
 def sshar_user_split_of(subject_id, user_case=0):
     """Cross-user 7:1:2 split: 7 train subjects, 1 val subject, the rest test (see module docstring)."""
-    train_ids = SSHAR_USER_CASES[user_case]
-    if subject_id not in train_ids:
+    if subject_id not in SSHAR_USER_CASES[user_case]:
         return 'test'
-    return 'val' if subject_id == train_ids[-1] else 'train'
+    return 'val' if subject_id == SSHAR_VAL_SUBJECTS[user_case] else 'train'
 
 
 def sshar_split_of(pos, direction, rep):

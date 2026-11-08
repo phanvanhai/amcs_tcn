@@ -29,7 +29,8 @@ DATASETS = {
     # room_XX/esp/rx_YY/subject_ZZ/amp_actAA_posBB_dirCC_repDD.npy, mỗi file (1, 56, 1000).
     # 10 người x 8 hành động x 80 mẫu = 6400 mẫu (800/lớp). Chia 7:1:2 -> 4480/640/1280:
     #   split_by='user'   (mặc định, cross-user): case k của benchmark, 7 người train / 1 người val / 2 người test
-    #                     case 0: train 1,2,3,4,9,10,11 | val 12 | test 13,14 (đổi bằng --user_case 0..4)
+    #                     case 0: train 1,2,3,4,9,10,11 | val 12 | test 13,14 (đổi bằng --user_case 0..4,
+    #                     bảng 5 case: docs/kaggle_run_convention.md mục 4)
     #   split_by='repeat' : chia theo lần lặp, người nào cũng có ở cả 3 tập (xem docs/SSHAR_ESP_protocol.md)
     'SSHAR_ESP': {
         'format': 'sshar',
@@ -61,11 +62,8 @@ TRAIN = {
     'noise_std': 0.02,         # độ lớn nhiễu Gaussian (jittering) khi train, 0 để tắt
     'save_dir': 'model',
     'log_dir': 'logs',
-    # Development -> đánh giá trên VAL; Final test: 1 lần (seed 42) -> đánh giá trên TEST.
-    # Hiện chỉ chạy 1 seed (42) để đánh giá nhanh; thêm seed khi cần, vd. [42, 3407, 1024, 2024, 0]
-    # (hoặc --seeds 42 3407 ... khi chạy).
-    'dev_seeds': [42],
-    'final_seed': 42,
+    # Hiện chỉ chạy 1 seed (42); thêm seed khi cần, vd. [42, 3407, 1024, 2024, 0] (hoặc --seeds ...).
+    'seeds': [42],
 }
 
 # Tiền xử lý tín hiệu theo bài báo (mục "CSI processing"): Low-pass -> Hamming -> Kalman, nối tiếp
@@ -183,7 +181,7 @@ def add_common_args(parser):
     parser.add_argument('--split', dest='split_by', default=None, choices=['user', 'repeat'],
                         help="SSHAR: 'user' = cross-user (mặc định), 'repeat' = theo lần lặp")
     parser.add_argument('--user_case', type=int, default=None,
-                        help='SSHAR cross-user: case 0..4 của benchmark (mặc định 0: test 13,14, val 12)')
+                        help='SSHAR cross-user: case 0..4 (mặc định 0: train 1,2,3,4,9,10,11 | val 12 | test 13,14)')
     parser.add_argument('--patience', type=int, default=None,
                         help='dừng sớm sau N epoch liên tiếp val acc không cải thiện (mặc định 10; 0 = tắt)')
     parser.add_argument('--time_steps', type=int, default=None,

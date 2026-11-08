@@ -75,17 +75,18 @@ theo lần lặp. Mỗi người có 640 bản ghi (8 hành động × 80), nên
 4480 / 640 / 1280 mẫu.
 
 Dùng lại 5 case chia theo người của benchmark (`USER_CASES['sshar']` trong
-`CodeForPaper/benchmark/datasets.py`). Mỗi case cho 8 người được train, người còn lại là test. Ở đây
-**người cuối cùng trong danh sách 8 người được tách ra làm val**, để val cũng là người không có trong
-train, giống với điều kiện của test.
+`CodeForPaper/benchmark/datasets.py`). Mỗi case cho 8 người được train, người còn lại là test. Một
+trong 8 người đó được tách ra làm **val**, để val cũng là người không có trong train, giống với điều
+kiện của test. Case 0 lấy người cuối danh sách (12). Case 1 đến 4 chọn ngẫu nhiên (`random.Random(42)`,
+lần lượt từng case, không trùng người val của các case trước), nên năm case có năm người val khác nhau.
 
 | Case | Train (7 người) | Val (1 người) | Test (2 người) |
 |---|---|---|---|
 | **0 (mặc định)** | **01, 02, 03, 04, 09, 10, 11** | **12** | **13, 14** |
-| 1 | 01, 03, 04, 09, 11, 12, 13 | 14 | 02, 10 |
-| 2 | 01, 02, 04, 09, 10, 12, 13 | 14 | 03, 11 |
-| 3 | 02, 03, 04, 10, 11, 12, 13 | 14 | 01, 09 |
-| 4 | 01, 02, 04, 09, 10, 11, 13 | 14 | 03, 12 |
+| 1 | 01, 03, 04, 09, 11, 12, 14 | 13 | 02, 10 |
+| 2 | 02, 04, 09, 10, 12, 13, 14 | 01 | 03, 11 |
+| 3 | 03, 04, 10, 11, 12, 13, 14 | 02 | 01, 09 |
+| 4 | 01, 02, 04, 09, 11, 13, 14 | 10 | 03, 12 |
 
 Hiện chỉ chạy **case 0**. Đổi case bằng `--user_case k`. Lưu ý: 5 case này không phủ đều mọi người
 (người 03 nằm trong test ở 2 case, người 04 không bao giờ nằm trong test). Nếu sau này chạy nhiều case
@@ -101,12 +102,12 @@ SSHAR_USER_CASES = [
     [2, 3, 4, 10, 11, 12, 13, 14],
     [1, 2, 4, 9, 10, 11, 13, 14],
 ]
+SSHAR_VAL_SUBJECTS = [12, 13, 1, 2, 10]   # người val của case 0..4
 
 def sshar_user_split_of(subject_id, user_case=0):   # subject_id: số trong tên thư mục subject_XX
-    train_ids = SSHAR_USER_CASES[user_case]
-    if subject_id not in train_ids:
+    if subject_id not in SSHAR_USER_CASES[user_case]:
         return 'test'
-    return 'val' if subject_id == train_ids[-1] else 'train'
+    return 'val' if subject_id == SSHAR_VAL_SUBJECTS[user_case] else 'train'
 ```
 
 Số mẫu phải ra (case nào cũng vậy):
@@ -199,14 +200,9 @@ nguyên**, tập val được tách ra từ tập train cũ.
   nhiều epoch hoà nhau thì lấy epoch muộn nhất.
 - Số epoch tối đa vẫn là 100. Báo cáo kèm best epoch và tổng số epoch đã chạy.
 
-Hai giai đoạn:
-
-1. **Development:** train trên train, chọn checkpoint theo val, **báo cáo trên val**. Mọi so sánh
-   và mọi quyết định điều chỉnh đều dựa vào giai đoạn này, không nhìn vào test. Hiện chạy seed 42.
-   Khi có thêm seed thì báo cáo mean ± std qua các seed.
-2. **Final test:** chạy một lần duy nhất ở bước cuối, seed 42. Train như cũ, rồi đánh giá checkpoint
-   (chọn theo val) trên **test**; cùng checkpoint đó cũng được đo trên val để đối chiếu, tất cả trong
-   một lần chạy. Sau khi xem kết quả test thì không điều chỉnh gì thêm.
+**Luồng mỗi lần chạy** (không chia chế độ dev/final): train trên train, chọn checkpoint theo val (val
+chỉ dùng để chọn checkpoint và dừng sớm), rồi báo cáo trên **test** bằng checkpoint đó, kèm kết quả val
+của cùng checkpoint để đối chiếu. Hiện chạy seed 42; khi có thêm seed thì báo cáo mean ± std qua các seed.
 
 Những mục thuộc về từng mô hình (ghi rõ trong báo cáo của mô hình đó, không phải thiết lập chung):
 LR scheduler, augmentation, class weights, chuẩn hoá input và cách reshape input.
@@ -224,5 +220,5 @@ std 0.02, min-max theo min/max toàn cục của tập train, và giữ đủ T 
 - [ ] Batch 32, tối đa 100 epoch, Adam, LR theo bài gốc
 - [ ] Chọn checkpoint theo val accuracy cao nhất
 - [ ] Dừng sớm sau 10 epoch liên tiếp val accuracy không cải thiện (bằng mức tốt nhất vẫn tính là cải thiện)
-- [ ] Kết quả development báo cáo trên val (seed 42); test chỉ đánh giá một lần (seed 42)
+- [ ] Báo cáo trên test bằng checkpoint chọn theo val, kèm kết quả val của cùng checkpoint (seed 42)
 - [ ] Báo cáo accuracy và precision / recall / F1 (macro)

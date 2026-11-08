@@ -44,11 +44,9 @@ as in the authors' code. Metrics: accuracy, macro precision /
 recall / F1.
 
 ```
-python run_all.py --dataset SSHAR_ESP --filters none --mode dev     # seed 42 (config dev_seeds) -> VAL
-python run_all.py --dataset SSHAR_ESP --filters none --mode final   # seed 42 -> TEST (+ VAL of the same checkpoint)
+python run_all.py --dataset SSHAR_ESP --filters none   # seed 42: checkpoint by val -> TEST (+ VAL of that checkpoint)
 ```
 
-Use `--mode dev` for every comparison / tuning; run `--mode final` only once at the end.
 Dataset, device and split details shared by all models: [docs/SSHAR_ESP_protocol.md](docs/SSHAR_ESP_protocol.md).
 Shared Kaggle cell, CLI flags, run naming and result layout: [docs/kaggle_run_convention.md](docs/kaggle_run_convention.md).
 
@@ -67,37 +65,34 @@ python run_all.py                      # lowpass hamming kalman (default)
 
 ## Run on Kaggle
 
-1. Upload the `UT_HAR` folder as a Kaggle Dataset (or use an existing public one) and add it to the notebook.
-2. Notebook settings: **Accelerator = GPU T4**, **Internet = On**.
-3. Cells:
+SSHAR ESP: use the shared cell in [docs/kaggle_run_convention.md](docs/kaggle_run_convention.md)
+(section 6). Edit only the config block (`SPLIT`, `USER_CASE`, `PATIENCE`, `SEEDS`, `FILTERS`);
+notebook settings: **GPU**, **Internet = On**.
 
-```python
-!git clone https://github.com/<user>/<repo>.git
-%cd <repo>
-!pip install -q -r requirements.txt
-```
-
-```python
-!python main.py                 # single run, seed 42, 100 epochs, test metrics
-# !python run_all.py            # dev: seed 42, val metrics; --mode final: seed 42, test
-# !python main.py --data_path /kaggle/input/<dataset>/UT_HAR --batch_size 32
-```
-
-Outputs of `main.py`: `model/AMCS_TCN_FC/best.pth`, `logs/AMCS_TCN_FC/`.
-
-Outputs of `run_all.py` (one folder per run, summary rewritten after every seed):
+Equivalent command:
 
 ```
-results/<YYYYmmdd-HHMMSS>_UT_HAR/
+python -u run_all.py --dataset SSHAR_ESP --filters none --split user --user_case 0 \
+    --patience 10 --seeds 42 --data_path <folder containing room_02> --results_dir results
+```
+
+Without `--run_name` the run folder is named by the convention, e.g.
+`results/SSHAR_ESP_AMCS_TCN_FC_user0_p10_seed42/`:
+
+```
+results/<RUN>/
   config.json, environment.json
-  summary.txt          # mean ± std + comparison with the paper's numbers
+  summary.txt          # split + subjects, patience, accuracy / precision / recall / F1 on test (+ val)
   summary.csv
   AMCS_TCN_FC/
     per_seed.csv, per_class_mean_std.csv, summary.json
     seed_<s>/  best.pth, history.csv, curve.png, metrics.json, test_metrics_and_size.txt,
                classification_report.txt, per_class_metrics.csv, confusion_matrix.csv,
                cm.png, cm_normalized.png, predictions.csv
+               val/   (same metrics on the val set, same checkpoint)
 ```
+
+UT-HAR: `python run_all.py --dataset UT_HAR --filters none` (fixed SenseFi split).
 
 Clone into `/kaggle/working` so outputs are kept after the session.
 

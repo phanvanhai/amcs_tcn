@@ -1,13 +1,11 @@
 """Chạy mô hình với nhiều seed, lưu chi tiết từng seed và bảng tổng hợp mean ± std.
 
-Hai chế độ (model luôn được chọn theo best val accuracy, có early stop trên val):
-    --mode dev    (mặc định) seed config['dev_seeds'] (hiện [42]) -> metric đo trên VAL. Tập test
-                  không được nạp, dùng cho mọi điều chỉnh/so sánh.
-    --mode final  1 lần, seed config['final_seed'] (42): train, chọn checkpoint theo val rồi đo trên
-                  TEST; cùng checkpoint đó cũng được đo trên VAL (file trong seed_<s>/val/).
+Mỗi seed: train trên train, chọn checkpoint theo best val accuracy (val chỉ dùng để chọn checkpoint
+và dừng sớm), rồi đo checkpoint đó trên TEST (seed_<s>/) và trên VAL (seed_<s>/val/).
+Quy ước gọi và tên run: docs/kaggle_run_convention.md.
 
 Cấu trúc thư mục kết quả:
-results/<YYYYmmdd-HHMMSS>_<dataset>/
+results/<RUN>/      (mặc định RUN = <DATASET>_<MODEL>_<user{k}|repeat>_p<PATIENCE>_seed<s...>)
     config.json, environment.json
     <Model>/
         seed_<s>/   best.pth, history.csv, curve.png, metrics.json, test_metrics_and_size.txt,
@@ -64,8 +62,23 @@ PAPER_REFERENCE = {
     'AMCS-TCN, Table 5': {'rrmse': (0.3950, None), 'brier_score': (0.0156, None)},
 }
 
+# Tên các model được train (khớp model_classes trong main()); dùng cho tên run mặc định
+MODEL_NAMES = ['AMCS_TCN_FC']
+
 PCT_METRICS = ['accuracy', 'precision', 'recall', 'f1']
 RAW_METRICS = ['brier_score', 'rrmse', 'latency_ms', 'best_epoch', 'epochs_trained', 'train_time_s']
+
+
+def default_run_name(config, seeds, model_names):
+    """Tên run theo docs/kaggle_run_convention.md:
+    <DATASET>_<MODEL>_<user{k}|repeat>_p<PATIENCE>_seed<s1-s2-...>
+    (dataset có split cố định như UT-HAR: bỏ phần split)."""
+    parts = [config['dataset'], '+'.join(model_names)]
+    fk = config.get('fmt_kwargs', {})
+    if config.get('format') == 'sshar':
+        parts.append(f"user{fk.get('user_case', 0)}" if fk.get('split_by', 'user') == 'user' else 'repeat')
+    parts += [f"p{config['early_stop_patience']}", 'seed' + '-'.join(map(str, seeds))]
+    return '_'.join(parts)
 
 
 def set_seed(seed=3407):
@@ -112,7 +125,7 @@ def summarize_model(model_dir, model_name, per_seed, class_names):
         summary[k + '_mean'], summary[k + '_std'] = (v * 100 for v in mean_std([r[k] for r in per_seed]))
     for k in RAW_METRICS:
         summary[k + '_mean'], summary[k + '_std'] = mean_std([r[k] for r in per_seed])
-    if 'val_accuracy' in per_seed[-1]:  # mode final: cùng checkpoint, đo thêm trên val
+    if 'val_accuracy' in per_seed[-1]:  # cùng checkpoint, đo thêm trên val
         for k in PCT_METRICS:
             summary[f'val_{k}_mean'], summary[f'val_{k}_std'] = (
                 v * 100 for v in mean_std([r[f'val_{k}'] for r in per_seed]))
@@ -160,10 +173,9 @@ def write_run_summary(run_dir, summaries, config):
              f"Filters: {' -> '.join(config.get('filters') or []) or 'none (raw)'} | "
              f"params: {json.dumps({k: v for k, v in config.get('filter_params', {}).items() if k in (config.get('filters') or [])})}",
              f"Normalize: {config.get('normalize', 'minmax')} | noise_std: {config.get('noise_std')}",
-             f"Mode: {config['mode']} -> metrics on {config['eval_split'].upper()} "
-             f"(model = best val accuracy) | split sizes: {config['split_sizes']}",
+             f"Model = best val accuracy -> metrics on TEST (+ VAL) | split sizes: {config['split_sizes']}",
              *([f"Split: {config['split_desc']}"] if config.get('split_desc') else []),
-             '', f"=== Kết quả trên {config['eval_split'].upper()} (mean ± std qua các seed, std với ddof=0) ==="]
+             '', "=== Kết quả trên TEST (mean ± std qua các seed, std với ddof=0) ==="]
     for s in summaries:
         lines.append(f"\n{s['model']}  (seeds: {s['seeds']})")
         for k in PCT_METRICS:
@@ -198,12 +210,12 @@ def write_run_summary(run_dir, summaries, config):
 def main():
     import argparse
     parser = add_common_args(argparse.ArgumentParser())
-    parser.add_argument('--mode', default='dev', choices=['dev', 'final'],
-                        help="dev: seed config['dev_seeds'], đánh giá trên val | final: seed 42, đánh giá trên test")
     parser.add_argument('--seeds', type=int, nargs='+', default=None,
-                        help="ghi đè seed (mặc định: dev -> config['dev_seeds'], final -> config['final_seed'])")
+                        help="danh sách seed (mặc định config['seeds'] = [42])")
     parser.add_argument('--results_dir', default='results', help='thư mục gốc chứa kết quả')
-    parser.add_argument('--run_name', default=None, help='tên thư mục lần chạy (mặc định: thời gian_dataset)')
+    parser.add_argument('--run_name', default=None,
+                        help='tên thư mục lần chạy (mặc định theo docs/kaggle_run_convention.md, '
+                             'vd. SSHAR_ESP_AMCS_TCN_FC_final_user0_p10_seed42)')
     args = parser.parse_args()
 
     # 配置见 config.py (默认 100 轮，严格对齐论文)
@@ -214,12 +226,9 @@ def main():
                           split_by=args.split_by, user_case=args.user_case)
     class_names = config['class_names']
 
-    # dev: config['dev_seeds'] -> val | final: seed 42 -> test
-    seed_list = args.seeds or (config['dev_seeds'] if args.mode == 'dev' else [config['final_seed']])
-    config['mode'] = args.mode
-    config['eval_split'] = 'val' if args.mode == 'dev' else 'test'
+    seed_list = args.seeds or config['seeds']
 
-    run_name = args.run_name or f"{datetime.now():%Y%m%d-%H%M%S}_{config['dataset']}_{args.mode}"
+    run_name = args.run_name or default_run_name(config, seed_list, MODEL_NAMES)
     run_dir = os.path.join(args.results_dir, run_name)
     os.makedirs(run_dir, exist_ok=True)
 
@@ -234,14 +243,15 @@ def main():
         # ("AMCS_TCN", AMCS_TCN),
         ("AMCS_TCN_FC", AMCS_TCN_FC)
     ]
+    assert [n for n, _ in model_classes] == MODEL_NAMES, "cập nhật MODEL_NAMES cho khớp model_classes (tên run)"
 
     # 数据只加载一次 (数据集本身不依赖随机种子)
-    # Model luôn chọn theo val. Tập đánh giá: dev -> val (test không được nạp), final -> test.
+    # Model chọn theo val, báo cáo trên test (và val).
     print(f"⏳ Đang nạp dữ liệu ({config['dataset']}, {config['data_path']})...", flush=True)
     t_load = time.time()
     train_set = CSIDataset(config['data_path'], 'train', **dataset_kwargs(config))
     val_set = CSIDataset(config['data_path'], 'val', **dataset_kwargs(config))
-    eval_set = val_set if args.mode == 'dev' else CSIDataset(config['data_path'], 'test', **dataset_kwargs(config))
+    test_set = CSIDataset(config['data_path'], 'test', **dataset_kwargs(config))
     clear_cache()  # dataset đã giữ bản cần dùng, bỏ bản thô/đã lọc để tiết kiệm RAM
     print(f"✅ Nạp dữ liệu xong sau {time.time() - t_load:.0f}s", flush=True)
     if config['format'] == 'sshar':
@@ -251,10 +261,9 @@ def main():
                                 + ' | ' + ' | '.join(f"{k}: {', '.join(s.replace('subject_', '') for s in v)}"
                                                      for k, v in subj.items()))
         print(f"👥 Split {config['split_desc']}", flush=True)
-    config['split_sizes'] = {'train': len(train_set), 'val': len(val_set),
-                             **({'test': len(eval_set)} if args.mode == 'final' else {})}
-    print(f"📦 mode={args.mode} | sizes: {config['split_sizes']} | eval on {config['eval_split'].upper()} | "
-          f"seeds: {seed_list} | sample shape: {tuple(train_set.x.shape[1:])} (antennas, T, subcarriers)")
+    config['split_sizes'] = {'train': len(train_set), 'val': len(val_set), 'test': len(test_set)}
+    print(f"📦 sizes: {config['split_sizes']} | seeds: {seed_list} | "
+          f"sample shape: {tuple(train_set.x.shape[1:])} (antennas, T, subcarriers)")
     with open(os.path.join(run_dir, 'config.json'), 'w', encoding='utf-8') as f:
         json.dump({**config, 'seeds': seed_list}, f, indent=2)
     with open(os.path.join(run_dir, 'environment.json'), 'w', encoding='utf-8') as f:
@@ -281,18 +290,18 @@ def main():
             # DataLoader 在循环内创建，打乱顺序受当前种子控制
             train_loader = DataLoader(train_set, config['batch_size'], shuffle=True)
             val_loader = DataLoader(val_set, config['batch_size'], shuffle=False)
-            eval_loader = DataLoader(eval_set, config['batch_size'], shuffle=False)
+            test_loader = DataLoader(test_set, config['batch_size'], shuffle=False)
 
             # 动态实例化模型与 Trainer，每个 seed 独立输出目录
             seed_config = {**config, 'output_dir': os.path.join(model_dir, f'seed_{current_seed}')}
             model = ModelClass(**model_kwargs(config))
-            trainer = Trainer(model, train_loader, val_loader, eval_loader, seed_config)
+            trainer = Trainer(model, train_loader, val_loader, test_loader, seed_config)
 
             trainer.run()
-            metrics_dict = trainer.test(class_names, title=config['eval_split'].upper())
-            if args.mode == 'final':  # cùng checkpoint, đo thêm trên val (file trong seed_<s>/val/)
-                val_metrics = trainer.test(class_names, loader=val_loader, subdir='val', title='VAL')
-                metrics_dict.update({f'val_{k}': val_metrics[k] for k in PCT_METRICS})
+            metrics_dict = trainer.test(class_names, title='TEST')
+            # cùng checkpoint, đo thêm trên val (file trong seed_<s>/val/)
+            val_metrics = trainer.test(class_names, loader=val_loader, subdir='val', title='VAL')
+            metrics_dict.update({f'val_{k}': val_metrics[k] for k in PCT_METRICS})
             per_seed.append({'seed': current_seed, **metrics_dict})
 
             # 每个 seed 结束后立即更新汇总 (会话中断也不会丢失已完成的结果)
@@ -300,7 +309,7 @@ def main():
             write_run_summary(run_dir, summaries + [summary], config)
 
             # 清理显存，防止下一个循环 OOM
-            del trainer, model, train_loader, val_loader, eval_loader
+            del trainer, model, train_loader, val_loader, test_loader
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             print(f"✨ 第 {i + 1} 次实验执行完毕 (acc={metrics_dict['accuracy']:.4f})，显存已清理。")
