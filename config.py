@@ -57,7 +57,7 @@ TRAIN = {
     'epochs': 100,
     'lr_step': 20,             # StepLR step_size
     'lr_gamma': 0.5,           # StepLR gamma
-    'early_stop_patience': 10,   # dừng sớm: 10 epoch liên tiếp val acc không cải thiện (protocol chung)
+    'early_stop_patience': 10,   # dừng sớm: 10 epoch liên tiếp val acc không cải thiện (protocol chung); 0 = tắt
     'noise_std': 0.02,         # độ lớn nhiễu Gaussian (jittering) khi train, 0 để tắt
     'save_dir': 'model',
     'log_dir': 'logs',
@@ -185,7 +185,7 @@ def add_common_args(parser):
     parser.add_argument('--user_case', type=int, default=None,
                         help='SSHAR cross-user: case 0..4 của benchmark (mặc định 0: test 13,14, val 12)')
     parser.add_argument('--patience', type=int, default=None,
-                        help='dừng sớm sau N epoch liên tiếp val acc không cải thiện (mặc định 10)')
+                        help='dừng sớm sau N epoch liên tiếp val acc không cải thiện (mặc định 10; 0 = tắt)')
     parser.add_argument('--time_steps', type=int, default=None,
                         help='độ dài thời gian đưa vào model (phải chia hết độ dài gốc; giảm bằng trung bình khối)')
     parser.add_argument('--device', default=None)

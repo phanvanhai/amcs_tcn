@@ -184,7 +184,8 @@ class Trainer:
                 self.early_stop_counter = 0  # 只要准确率创新高，就重置耐心值
             else:
                 self.early_stop_counter += 1
-                if self.early_stop_counter >= self.early_stop_patience:
+                # patience <= 0: tắt dừng sớm (chạy đủ số epoch)
+                if 0 < self.early_stop_patience <= self.early_stop_counter:
                     self.early_stop = True
 
             epoch_time = time.time() - t_epoch
@@ -192,7 +193,8 @@ class Trainer:
                                  int(is_best), round(epoch_time, 3)])
 
             # 每个 epoch 只输出一行
-            status = "* best" if is_best else f"es {self.early_stop_counter}/{self.early_stop_patience}"
+            status = ("* best" if is_best else f"es {self.early_stop_counter}/{self.early_stop_patience}"
+                      if self.early_stop_patience > 0 else f"no best for {self.early_stop_counter}")
             print(f"[Epoch {epoch + 1:3d}] lr {current_lr:.6f} | train {train_loss:.4f}/{train_acc:.4f} | "
                   f"val {val_loss:.4f}/{val_acc:.4f} | {epoch_time:.1f}s | {status}", flush=True)
 

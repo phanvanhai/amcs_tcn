@@ -155,7 +155,8 @@ def write_run_summary(run_dir, summaries, config):
                 != config['time_steps'] else '') + ')',
              f"Data path: {config['data_path']}",
              f"Epochs: {config['epochs']} | batch: {config['batch_size']} | lr: {config['lr']} | "
-             f"StepLR({config['lr_step']}, {config['lr_gamma']}) | early stop: {config['early_stop_patience']}",
+             f"StepLR({config['lr_step']}, {config['lr_gamma']}) | early stop: "
+             f"{config['early_stop_patience'] if config['early_stop_patience'] > 0 else 'off'}",
              f"Filters: {' -> '.join(config.get('filters') or []) or 'none (raw)'} | "
              f"params: {json.dumps({k: v for k, v in config.get('filter_params', {}).items() if k in (config.get('filters') or [])})}",
              f"Normalize: {config.get('normalize', 'minmax')} | noise_std: {config.get('noise_std')}",
