@@ -23,7 +23,9 @@ Pipeline (both formats): optional denoising (datasets/preprocess.py, per series,
 raw rate) -> optional time downsampling (mean over blocks of raw_T // time_steps samples) ->
 optional scaling. normalize='minmax' uses the TRAIN split's global min/max (computed after the steps
 above) for every split (SenseFi normalizes each split with its own statistics, which leaks test info);
-normalize='none' feeds the values as-is.
+normalize='zscore_sample' standardizes every (sample, stream, subcarrier) series over time,
+(x - mean_T) / (std_T + 1e-6) with the unbiased std, exactly as CSI-WiFormer (no dataset statistics,
+removes the absolute amplitude level); normalize='none' feeds the values as-is.
 """
 import hashlib
 import json
@@ -243,13 +245,29 @@ def _load_processed(data_path, split, fmt, antennas, subcarriers, fmt_kwargs, ti
     return _cache[key]
 
 
+NORMALIZE_MODES = ('minmax', 'zscore_sample', 'none')
+
+
+def zscore_per_sample(x, eps=1e-6, chunk=256):
+    """WiFormer normalization on x (N, A, T, S): per sample and per (stream, subcarrier), over time T.
+
+    torch equivalent: (x - x.mean(dim=2, keepdim=True)) / (x.std(dim=2, keepdim=True) + 1e-6)
+    (torch.std is unbiased -> ddof=1). Computed in float64 over chunks of samples to bound memory.
+    """
+    out = np.empty(x.shape, dtype=np.float32)
+    for i in range(0, len(x), chunk):
+        c = x[i:i + chunk].astype(np.float64)
+        out[i:i + chunk] = (c - c.mean(axis=2, keepdims=True)) / (c.std(axis=2, ddof=1, keepdims=True) + eps)
+    return out
+
+
 class CSIDataset(Dataset):
     def __init__(self, data_path, split, antennas=3, subcarriers=30, time_steps=250,
                  filters=(), filter_params=None, normalize='minmax', fmt='sensefi', fmt_kwargs=None):
         if split not in ('train', 'val', 'test'):
             raise ValueError(f"split must be 'train', 'val' or 'test', got {split!r}")
-        if normalize not in ('minmax', 'none'):
-            raise ValueError(f"normalize must be 'minmax' or 'none', got {normalize!r}")
+        if normalize not in NORMALIZE_MODES:
+            raise ValueError(f"normalize must be one of {NORMALIZE_MODES}, got {normalize!r}")
         args = (fmt, antennas, subcarriers, fmt_kwargs or {}, time_steps, list(filters or []),
                 filter_params or {})
 
@@ -258,6 +276,8 @@ class CSIDataset(Dataset):
             x_train, _ = _load_processed(data_path, 'train', *args)
             x_min, x_max = float(x_train.min()), float(x_train.max())
             x = (x - x_min) / (x_max - x_min)
+        elif normalize == 'zscore_sample':
+            x = zscore_per_sample(x)
 
         self.x = torch.from_numpy(np.ascontiguousarray(x, dtype=np.float32))
         self.y = torch.from_numpy(y)

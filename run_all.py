@@ -78,6 +78,8 @@ def default_run_name(config, seeds, model_names):
     if config.get('format') == 'sshar':
         parts.append(f"user{fk.get('user_case', 0)}" if fk.get('split_by', 'user') == 'user' else 'repeat')
     parts += [f"p{config['early_stop_patience']}", 'seed' + '-'.join(map(str, seeds))]
+    if config.get('normalize', 'minmax') != 'minmax':  # chuẩn hoá khác mặc định -> thêm hậu tố
+        parts.append(config['normalize'])
     return '_'.join(parts)
 
 

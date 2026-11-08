@@ -76,9 +76,13 @@ PREPROCESS = {
         'hamming': {'window': 5},                 # độ dài cửa sổ Hamming (số mẫu)
         'kalman': {'q_ratio': 1.0},               # Q/R; nhỏ hơn -> làm mượt mạnh hơn
     },
-    # Chuẩn hoá sau khi lọc: 'minmax' (min/max toàn cục của tập train, tự thêm) | 'none' (giữ giá trị
-    # thô; repo gốc không có data loader, bài báo không nhắc chuẩn hoá). Lưu ý noise_std là độ lớn
-    # tuyệt đối: với 'none' (UT-HAR thô std ~5.9) jitter 0.02 yếu hơn nhiều so với khi minmax.
+    # Chuẩn hoá sau khi lọc (repo gốc không có data loader, bài báo không nhắc chuẩn hoá):
+    #   'minmax'        : min/max toàn cục của tập train (mặc định, tự thêm; giữ mức biên độ tuyệt đối)
+    #   'zscore_sample' : z-score theo từng mẫu, từng (rx, subcarrier), trên trục thời gian, giống
+    #                     CSI-WiFormer: (x - mean_T) / (std_T + 1e-6); bỏ mức biên độ tuyệt đối
+    #   'none'          : giữ giá trị thô
+    # Lưu ý noise_std (jitter khi train) là độ lớn tuyệt đối nên mạnh/yếu tương đối khác nhau theo
+    # cách chuẩn hoá (vd. 'none' trên UT-HAR thô std ~5.9: jitter 0.02 rất yếu).
     'normalize': 'minmax',
 }
 
@@ -190,6 +194,7 @@ def add_common_args(parser):
     parser.add_argument('--filters', nargs='+', default=None,
                         choices=['lowpass', 'hamming', 'kalman', 'none'],
                         help="bộ lọc tiền xử lý (mặc định theo config.PREPROCESS); 'none' = dữ liệu thô")
-    parser.add_argument('--normalize', default=None, choices=['minmax', 'none'],
-                        help="chuẩn hoá sau lọc (mặc định theo config.PREPROCESS); 'none' = không chuẩn hoá")
+    parser.add_argument('--normalize', default=None, choices=['minmax', 'zscore_sample', 'none'],
+                        help="chuẩn hoá sau lọc (mặc định minmax); zscore_sample = z-score theo từng mẫu, "
+                             "từng subcarrier trên trục thời gian (giống WiFormer); none = không chuẩn hoá")
     return parser
