@@ -8,6 +8,9 @@ note này để kết quả so sánh được với nhau. Code tham chiếu: `da
 **Cách chia chính: cross-user** (người trong test không xuất hiện khi train), case 0:
 train 7 người `01, 02, 03, 04, 09, 10, 11` / val `12` / test `13, 14`. Chi tiết ở mục 3.
 
+Cách gọi trên Kaggle (biến cấu hình, tham số dòng lệnh, tên run, cấu trúc kết quả, cell mẫu):
+[kaggle_run_convention.md](kaggle_run_convention.md).
+
 ## 1. Thiết bị và tín hiệu
 
 | Mục | Giá trị |

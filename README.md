@@ -50,6 +50,7 @@ python run_all.py --dataset SSHAR_ESP --filters none --mode final   # seed 42 ->
 
 Use `--mode dev` for every comparison / tuning; run `--mode final` only once at the end.
 Dataset, device and split details shared by all models: [docs/SSHAR_ESP_protocol.md](docs/SSHAR_ESP_protocol.md).
+Shared Kaggle cell, CLI flags, run naming and result layout: [docs/kaggle_run_convention.md](docs/kaggle_run_convention.md).
 
 ## Signal preprocessing
 
